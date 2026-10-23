@@ -1,0 +1,23 @@
+{
+  "sk-alice-personal-a1b2c3d4e5f6": {
+    "credentialId": "alice-personal",
+    "userId": "alice",
+    "type": "personal_oauth",
+    "authFile": "auth-alice-personal.json",
+    "limits": { "rpm": 60, "daily": 500 }
+  },
+  "sk-alice-automation-g7h8i9j0k1l2": {
+    "credentialId": "alice-automation",
+    "userId": "alice",
+    "type": "service_account",
+    "authFile": "auth-alice-automation.json",
+    "limits": { "rpm": 120, "daily": 2000 }
+  },
+  "sk-team-ci-m3n4o5p6q7r8": {
+    "credentialId": "team-ci",
+    "userId": "ci-bot",
+    "type": "service_account",
+    "authFile": "auth-team-ci.json",
+    "limits": { "rpm": 300, "daily": 10000 }
+  }
+}

@@ -1,0 +1,8 @@
+auth/*
+!auth/.gitkeep
+registry/*.json
+.env
+.audit/
+__pycache__/
+.venv/
+.tmp/

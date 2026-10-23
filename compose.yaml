@@ -1,0 +1,15 @@
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: harnesscastelo
+      POSTGRES_USER: harnesscastelo
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - harnesscastelo_db:/var/lib/postgresql/data
+
+volumes:
+  harnesscastelo_db:
