@@ -9,7 +9,7 @@ from pathlib import Path
 from oauth_codex import Client
 from oauth_codex.auth.store import FileTokenStore
 
-from store import TokenBundle, create_credential, credential_exists
+from backend.store import TokenBundle, create_credential, credential_exists
 
 
 async def main() -> None:

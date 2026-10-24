@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 from cryptography.fernet import Fernet
 from sqlalchemy import func, select
 
-from database import Account, ClientKey, CredentialRecord, Run, RunEvent, session_factory
+from backend.database import Account, ClientKey, CredentialRecord, Employee, EmployeeCredential, Run, RunEvent, session_factory
 
 
 @dataclass(frozen=True)
@@ -66,6 +66,10 @@ class UnknownClientKey(Exception):
     pass
 
 
+class UnavailableAssignment(Exception):
+    pass
+
+
 class QuotaExceeded(Exception):
     def __init__(self, kind: str):
         self.kind = kind
@@ -117,15 +121,6 @@ def _credential(row: CredentialRecord) -> Credential:
 
 async def admit(client_key: str, request: RequestRecord) -> AdmittedRun:
     key_hash = _key_hash(client_key)
-    now = datetime.now(timezone.utc)
-    day_start = datetime.combine(now.date(), time.min, tzinfo=timezone.utc)
-    run_id = uuid4()
-    body_text = request.body.decode("utf-8", errors="replace")
-    try:
-        payload = json.loads(body_text) if body_text else None
-    except json.JSONDecodeError:
-        payload = None
-
     async with session_factory()() as session, session.begin():
         key_ref = await session.execute(
             select(ClientKey.credential_id, CredentialRecord.user_id)
@@ -135,53 +130,70 @@ async def admit(client_key: str, request: RequestRecord) -> AdmittedRun:
         ref = key_ref.first()
         if not ref:
             raise UnknownClientKey
-
-        account = await session.scalar(
-            select(Account).where(Account.user_id == ref.user_id).with_for_update()
-        )
-        credential = await session.scalar(
-            select(CredentialRecord)
-            .where(CredentialRecord.credential_id == ref.credential_id)
-            .with_for_update()
-        )
-        key = await session.scalar(
-            select(ClientKey).where(ClientKey.key_hash == key_hash).with_for_update()
-        )
+        account = await session.scalar(select(Account).where(Account.user_id == ref.user_id).with_for_update())
+        credential = await session.scalar(select(CredentialRecord).where(
+            CredentialRecord.credential_id == ref.credential_id).with_for_update())
+        key = await session.scalar(select(ClientKey).where(ClientKey.key_hash == key_hash).with_for_update())
         if not account or account.disabled or not credential or credential.revoked or not key or key.revoked:
             raise UnknownClientKey
+        return await _record_run(session, credential, request, None)
 
-        rpm_count = await session.scalar(
+
+async def admit_employee(employee_id: UUID, credential_id: str, request: RequestRecord) -> AdmittedRun:
+    async with session_factory()() as session, session.begin():
+        ref = await session.scalar(select(CredentialRecord.user_id).where(
+            CredentialRecord.credential_id == credential_id))
+        if ref is None:
+            raise UnavailableAssignment
+        account = await session.scalar(select(Account).where(Account.user_id == ref).with_for_update())
+        credential = await session.scalar(select(CredentialRecord).where(
+            CredentialRecord.credential_id == credential_id).with_for_update())
+        assignment = await session.get(EmployeeCredential, (employee_id, credential_id))
+        employee = await session.get(Employee, employee_id)
+        if (not account or account.disabled or not credential or credential.revoked
+                or not credential.token_ciphertext or not assignment or not employee
+                or employee.disabled or employee.must_change_password):
+            raise UnavailableAssignment
+        return await _record_run(session, credential, request, employee_id)
+
+
+async def _record_run(session, credential: CredentialRecord, request: RequestRecord,
+                      employee_id: UUID | None) -> AdmittedRun:
+    now = datetime.now(timezone.utc)
+    day_start = datetime.combine(now.date(), time.min, tzinfo=timezone.utc)
+    run_id = uuid4()
+    body_text = request.body.decode("utf-8", errors="replace")
+    try:
+        payload = json.loads(body_text) if body_text else None
+    except json.JSONDecodeError:
+        payload = None
+
+    rpm_count = await session.scalar(
             select(func.count(Run.id)).where(
                 Run.credential_id == credential.credential_id,
                 Run.started_at >= now - timedelta(seconds=60),
             )
-        )
-        if rpm_count >= credential.rpm:
-            raise QuotaExceeded("rate")
+    )
+    if rpm_count >= credential.rpm:
+        raise QuotaExceeded("rate")
 
-        daily_count = await session.scalar(
+    daily_count = await session.scalar(
             select(func.count(Run.id)).where(
                 Run.credential_id == credential.credential_id,
                 Run.started_at >= day_start,
             )
-        )
-        if daily_count >= credential.daily:
-            raise QuotaExceeded("daily")
+    )
+    if daily_count >= credential.daily:
+        raise QuotaExceeded("daily")
 
-        session.add(
-            Run(
-                id=run_id,
-                credential_id=credential.credential_id,
-                started_at=now,
-                method=request.method,
-                path=request.path,
-                model=payload.get("model") if isinstance(payload, dict) else None,
-                request_body=body_text,
-                request_json=payload if isinstance(payload, (dict, list)) else None,
-            )
-        )
-        result = AdmittedRun(run_id, _credential(credential))
-    return result
+    session.add(Run(
+        id=run_id, credential_id=credential.credential_id, employee_id=employee_id,
+        started_at=now, method=request.method, path=request.path,
+        model=payload.get("model") if isinstance(payload, dict) else None,
+        request_body=body_text,
+        request_json=payload if isinstance(payload, (dict, list)) else None,
+    ))
+    return AdmittedRun(run_id, _credential(credential))
 
 
 async def valid_access_token(
@@ -190,23 +202,62 @@ async def valid_access_token(
 ) -> str:
     async with session_factory()() as session, session.begin():
         account = await session.scalar(
-            select(Account).where(Account.user_id == credential.user_id).with_for_update()
+            select(Account).where(Account.user_id == credential.user_id)
         )
         row = await session.scalar(
             select(CredentialRecord)
             .where(CredentialRecord.credential_id == credential.credential_id)
-            .with_for_update()
         )
         if not account or account.disabled or not row or row.revoked or not row.token_ciphertext:
             raise PermissionError(f"credential {credential.credential_id} is unavailable")
 
         tokens = _decode_tokens(row.token_ciphertext)
-        if not tokens.refresh or datetime.now(timezone.utc).timestamp() < tokens.expires - 60:
+        now = datetime.now(timezone.utc).timestamp()
+        if now < tokens.expires - 60:
+            return tokens.access
+        if not tokens.refresh:
+            if now >= tokens.expires:
+                raise PermissionError(f"credential {credential.credential_id} has an expired access token")
             return tokens.access
 
-        tokens = await refresh(tokens)
-        row.token_ciphertext = _encode_tokens(tokens)
-        return tokens.access
+        await session.execute(
+            select(func.pg_advisory_xact_lock(314159, func.hashtext(credential.credential_id)))
+        )
+        account = await session.scalar(
+            select(Account).where(Account.user_id == credential.user_id).execution_options(populate_existing=True)
+        )
+        row = await session.scalar(
+            select(CredentialRecord)
+            .where(CredentialRecord.credential_id == credential.credential_id)
+            .execution_options(populate_existing=True)
+        )
+        if not account or account.disabled or not row or row.revoked or not row.token_ciphertext:
+            raise PermissionError(f"credential {credential.credential_id} is unavailable")
+        tokens = _decode_tokens(row.token_ciphertext)
+        now = datetime.now(timezone.utc).timestamp()
+        if now < tokens.expires - 60:
+            return tokens.access
+        if not tokens.refresh:
+            if now >= tokens.expires:
+                raise PermissionError(f"credential {credential.credential_id} has an expired access token")
+            return tokens.access
+
+        refreshed = await refresh(tokens)
+        account = await session.scalar(
+            select(Account).where(Account.user_id == credential.user_id)
+            .with_for_update().execution_options(populate_existing=True)
+        )
+        row = await session.scalar(
+            select(CredentialRecord)
+            .where(CredentialRecord.credential_id == credential.credential_id)
+            .with_for_update().execution_options(populate_existing=True)
+        )
+        if not account or account.disabled or not row or row.revoked or not row.token_ciphertext:
+            raise PermissionError(f"credential {credential.credential_id} is unavailable")
+        if _decode_tokens(row.token_ciphertext) != tokens:
+            raise RuntimeError(f"credential {credential.credential_id} changed during OAuth refresh")
+        row.token_ciphertext = _encode_tokens(refreshed)
+        return refreshed.access
 
 
 async def create_credential(

@@ -1,7 +1,7 @@
 import argparse
 import asyncio
 
-from store import revoke_user
+from backend.store import revoke_user
 
 
 async def main() -> None:

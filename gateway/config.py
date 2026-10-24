@@ -1,14 +1,16 @@
 import os
 from pathlib import Path
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
 # Diretório onde ficam os arquivos auth-*.json
-AUTH_DIR = Path(os.environ.get("PROXY_AUTH_DIR", Path(__file__).resolve().parent / "auth"))
+AUTH_DIR = Path(os.environ.get("PROXY_AUTH_DIR", PROJECT_ROOT / "auth"))
 
 # Arquivo de registro client_key -> credencial
 REGISTRY_FILE = Path(
     os.environ.get(
         "PROXY_REGISTRY",
-        Path(__file__).resolve().parent / "registry" / "registry.json",
+        PROJECT_ROOT / "registry" / "registry.json",
     )
 )
 

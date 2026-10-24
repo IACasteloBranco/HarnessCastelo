@@ -6,8 +6,8 @@ import json
 import math
 from pathlib import Path
 
-from config import AUTH_DIR, REGISTRY_FILE
-from store import LegacyCredential, TokenBundle, import_legacy
+from backend.store import LegacyCredential, TokenBundle, import_legacy
+from gateway.config import AUTH_DIR, REGISTRY_FILE
 
 
 def load_legacy_entries() -> list[LegacyCredential]:

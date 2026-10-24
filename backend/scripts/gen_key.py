@@ -1,7 +1,7 @@
 import argparse
 import asyncio
 
-from store import issue_client_key
+from backend.store import issue_client_key
 
 
 async def main() -> None:

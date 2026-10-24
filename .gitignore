@@ -6,3 +6,4 @@ registry/*.json
 __pycache__/
 .venv/
 .tmp/
+.worktrees/

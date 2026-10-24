@@ -2,6 +2,8 @@
 
 Proxy FastAPI para o backend Codex, com OAuth por conta, chaves de cliente, limites de uso e captura de execuções para o harness.
 
+O código está separado em `backend/`, `gateway/` e `frontend/`. O mapa atual e os limites ainda pendentes estão em [`docs/PROJECT_CONTEXT.md`](docs/PROJECT_CONTEXT.md).
+
 ## Banco local no Windows
 
 Requer Python 3.11 ou superior e PostgreSQL 17. Para subir o PostgreSQL com Docker Compose:
@@ -28,7 +30,7 @@ Get-Content .env | ForEach-Object {
     if ($_ -match '^([^#=]+)=(.*)$') { Set-Item "Env:$($matches[1])" $matches[2] }
 }
 python -m alembic upgrade head
-python import_legacy.py
+python -m backend.scripts.import_legacy
 ```
 
 O importador preserva as chaves atuais e deixa os arquivos JSON no disco. Ele pode ser executado novamente; conflitos interrompem a transação em vez de substituir tokens existentes.
@@ -38,7 +40,7 @@ O importador preserva as chaves atuais e deixa os arquivos JSON no disco. Ele po
 No mesmo terminal, inicie o proxy:
 
 ```powershell
-python serve.py
+python -m gateway.serve
 ```
 
 Em outro PowerShell, confira a conexão com o banco:
@@ -52,22 +54,57 @@ O client key atual continua válido após a importação. O proxy guarda cada re
 Para criar uma credencial OAuth adicional pelo navegador e uma chave de proxy:
 
 ```powershell
-python create_auth.py novo-usuario
-python gen_key.py novo-usuario
+python -m backend.scripts.create_auth novo-usuario
+python -m backend.scripts.gen_key novo-usuario
 ```
 
 Se o mesmo usuário tiver mais de uma conta OAuth, informe um `credential_id` diferente:
 
 ```powershell
-python create_auth.py novo-usuario conta-secundaria
-python gen_key.py conta-secundaria
+python -m backend.scripts.create_auth novo-usuario conta-secundaria
+python -m backend.scripts.gen_key conta-secundaria
 ```
 
 Para revogar um usuário e suas contas/chaves:
 
 ```powershell
-python revoke_user.py novo-usuario
+python -m backend.scripts.revoke_user novo-usuario
 ```
+
+## Identidade interna do colaborador
+
+A identidade interna usa tabelas próprias e não altera os usuários OAuth ou as chaves do proxy. Depois de aplicar `python -m alembic upgrade head`, o operador cria a empresa, seus departamentos e as contas internas por comandos locais:
+
+```powershell
+python -m backend.scripts.provision organization EMPRESA "Minha Empresa"
+python -m backend.scripts.provision department EMPRESA CONTABIL "Contabilidade"
+python -m backend.scripts.provision employee EMPRESA COLAB001 --department CONTABIL
+python -m backend.scripts.provision employee EMPRESA GOV001 --role governance
+```
+
+O comando de criação imprime uma senha temporária uma vez. Entregue-a ao colaborador por um canal interno apropriado. Para recuperar o acesso ou desativar uma conta, use:
+
+```powershell
+python -m backend.scripts.provision reset-password COLAB001
+python -m backend.scripts.provision disable COLAB001
+```
+
+O login interno fica em `POST /api/auth/login`, com JSON `{"employee_code":"COLAB001","password":"..."}`. `GET /api/auth/me` informa a conta e se a senha precisa ser trocada; `POST /api/auth/change-password` recebe `current_password` e `new_password`; `POST /api/auth/logout` encerra a sessão. As rotas que alteram estado exigem o cabeçalho `Origin` correspondente à origem do serviço. A sessão usa cookie opaco `HttpOnly`, `Secure` e `SameSite=Lax`, dura até oito horas e pode ser revogada no banco. Cinco tentativas de senha inválida bloqueiam a conta por 15 minutos; o operador também pode recuperar o acesso com `reset-password`. A senha nova precisa ter pelo menos 12 caracteres. O navegador precisa acessar o serviço por HTTPS para usar o cookie seguro; a configuração HTTPS entra na etapa de infraestrutura.
+
+## OAuth compartilhado
+
+Após a migração, o operador cria a credencial sem token e designa o colaborador que fará a conexão. Depois pode atribuí-la a outras contas internas. Os códigos de colaborador continuam separados do ID do dono OAuth:
+
+```powershell
+python -m backend.scripts.shared_oauth create DONO_OAUTH CONTA01 COLAB001 --rpm 60 --daily 500
+python -m backend.scripts.shared_oauth assign CONTA01 COLAB002
+python -m backend.scripts.shared_oauth unassign CONTA01 COLAB002
+python -m backend.scripts.shared_oauth connector CONTA01 COLAB003
+```
+
+O comando `connector` também designa o responsável por uma credencial OAuth já importada. Com a senha interna definitiva e sessão ativa, esse responsável consulta `GET /api/oauth/credentials` e chama `POST /api/oauth/credentials/CONTA01/start` com `Origin` da aplicação. A resposta traz `connection_id` e `authorize_url`; a interface abre a URL no navegador. O OAuth Codex atual redireciona para `http://localhost:1455/auth/callback`. Após o redirecionamento, a interface pede ao responsável que cole a URL completa, mesmo que a página local não abra, e envia `{"callback_url":"..."}` a `POST /api/oauth/connections/CONNECTION_ID/complete`. O estado expira em dez minutos e só pode ser usado uma vez pela mesma sessão. Para renovar a conexão, inicie outro fluxo; uma conta OAuth diferente da já vinculada é recusada.
+
+O chat poderá usar `GET /api/oauth/credentials` para apresentar as credenciais atribuídas e enviar a requisição Codex por `POST /api/credentials/CONTA01/v1/responses` com o cookie interno, `Origin` da aplicação e corpo de Responses. Essa rota registra o colaborador no run; a cota de RPM e o limite diário são compartilhados pela credencial. Os cabeçalhos de sessão do navegador não são enviados ao upstream. As rotas antigas `/v1/*` e suas chaves continuam disponíveis, com runs sem colaborador interno. O frontend de chat e a entidade de conversas entram na etapa seguinte.
 
 ## Request de Responses
 
@@ -89,3 +126,40 @@ O backend exige `input` como lista e `stream: true`:
 - Os prompts e dados completos dos eventos de resposta ficam no banco para uso do harness. Restrinja o acesso ao banco e aplique a política de retenção adequada ao conteúdo.
 - `.env`, os registros JSON locais e os arquivos OAuth locais são ignorados pelo Git.
 - O login OAuth continua ocorrendo no navegador; os tokens importados e os novos ficam associados ao `user_id` informado.
+
+## QA supervisionado com AEC
+
+Instale o AEC fixado em `requiriments.txt` no ambiente do projeto:
+
+```bash
+python -m venv .venv
+.venv/bin/python -m pip install -r requiriments.txt
+.venv/bin/python -c "import aec; print(aec.__file__)"
+.venv/bin/aec --help
+```
+
+O comando `scan` usa o Codex CLI para um QA inicial em modo somente leitura. Ele só chama o implementador quando o QA relata um defeito reproduzido de lógica ou eficiência em um módulo Python existente. O ciclo adversarial usa worktrees separadas e os doze testes atuais como quality gate. Sete testes precisam de um PostgreSQL descartável com as migrações aplicadas. Em um terminal, inicie o banco:
+
+```bash
+docker run --rm --name harnesscastelo-aec-pg -e POSTGRES_PASSWORD=test -p 127.0.0.1:55433:5432 postgres:17-alpine
+```
+
+Em outro terminal, prepare o esquema e inicie o run:
+
+```bash
+export DATABASE_URL=postgresql+psycopg://postgres:test@127.0.0.1:55433/postgres
+.venv/bin/python -m alembic upgrade head
+export HARNESS_TEST_DATABASE_URL="$DATABASE_URL"
+.venv/bin/python tools/aec_cycle.py scan
+```
+
+O comando imprime `run_id`, `status` e o caminho do SQLite. Se o QA não encontrar correção necessária e os testes passarem, o estado será `NO_CHANGES`; uma falha no gate mantém o run em `NEEDS_REVIEW`. Uma correção que passar pela revisão e pelos testes para em `WAITING_APPROVAL`. Substitua `RUN_ID` pelo valor impresso para consultar o scan, a revisão, os gates e a aprovação pendente:
+
+```bash
+.venv/bin/python tools/aec_cycle.py report RUN_ID
+.venv/bin/aec --database .audit/aec/RUN_ID/aec.sqlite approvals pending
+```
+
+Cada run usa um SQLite próprio em `.audit/aec/RUN_ID/aec.sqlite`. O script copia os arquivos rastreados e os testes locais para um repositório temporário dentro de `.audit`, preservando o diretório de trabalho principal. O AEC cria worktrees distintas para o scan, a implementação e a revisão. O comando não decide a aprovação, não faz merge e não publica metodologias. Os arquivos do run permanecem em `.audit` para inspeção; o PostgreSQL descartável guarda somente os dados criados pelos testes.
+
+Para repetir o ensaio determinístico sem turnos Codex, use `.venv/bin/python tools/aec_cycle.py start` com outro banco de testes descartável.

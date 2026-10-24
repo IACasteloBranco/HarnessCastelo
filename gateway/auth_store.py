@@ -3,8 +3,8 @@ from typing import Callable
 
 import httpx
 
-from config import CLIENT_ID_BY_TYPE
-from store import Credential, TokenBundle, valid_access_token
+from backend.store import Credential, TokenBundle, valid_access_token
+from gateway.config import CLIENT_ID_BY_TYPE
 
 TOKEN_URL = "https://auth.openai.com/oauth/token"
 
