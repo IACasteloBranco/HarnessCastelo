@@ -61,11 +61,24 @@ class Run(Base):
             name="ck_runs_outcome",
         ),
         Index("ix_runs_credential_started", "credential_id", "started_at"),
+        UniqueConstraint("employee_id", "client_message_id", name="uq_runs_employee_client_message"),
+        ForeignKeyConstraint(["conversation_id", "employee_id"],
+                             ["conversations.id", "conversations.employee_id"],
+                             name="fk_runs_conversation_employee"),
+        CheckConstraint(
+            "(conversation_id IS NULL AND client_message_id IS NULL AND chat_prompt IS NULL) OR "
+            "(conversation_id IS NOT NULL AND client_message_id IS NOT NULL "
+            "AND chat_prompt IS NOT NULL AND employee_id IS NOT NULL)",
+            name="ck_runs_chat_fields",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
     credential_id: Mapped[str] = mapped_column(ForeignKey("credentials.credential_id"), nullable=False)
     employee_id: Mapped[UUID | None] = mapped_column(ForeignKey("employees.id"), nullable=True, index=True)
+    conversation_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True, index=True)
+    client_message_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    chat_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     method: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -134,6 +147,25 @@ class Employee(Base):
     failed_logins: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class Conversation(Base):
+    __tablename__ = "conversations"
+    __table_args__ = (UniqueConstraint("id", "employee_id"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    employee_id: Mapped[UUID] = mapped_column(ForeignKey("employees.id"), unique=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class GovernanceAccess(Base):
+    __tablename__ = "governance_access"
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    actor_employee_id: Mapped[UUID] = mapped_column(ForeignKey("employees.id"), nullable=False, index=True)
+    run_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False, index=True)
+    action: Mapped[str] = mapped_column(String(16), nullable=False)
+    accessed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class InternalSession(Base):

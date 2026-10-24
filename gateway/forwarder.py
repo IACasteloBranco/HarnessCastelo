@@ -17,12 +17,12 @@ audit_log = logging.getLogger("audit")
 
 
 async def forward(request: Request, path: str, admitted: AdmittedRun, body: bytes,
-                  browser_session: bool = False) -> Response:
+                  browser_session: bool = False, access_token: str | None = None) -> Response:
     credential = admitted.credential
     run_id = admitted.run_id
     t0 = time.time()
     try:
-        token = await get_valid_token(credential)
+        token = access_token if access_token is not None else await get_valid_token(credential)
     except Exception as exc:
         await finish_transport(run_id, None, "failed", "oauth_token_error")
         audit_log.warning("run=%s cred=%s OAuth token lookup failed: %s", run_id, credential.credential_id, exc)

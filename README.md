@@ -104,7 +104,26 @@ python -m backend.scripts.shared_oauth connector CONTA01 COLAB003
 
 O comando `connector` também designa o responsável por uma credencial OAuth já importada. Com a senha interna definitiva e sessão ativa, esse responsável consulta `GET /api/oauth/credentials` e chama `POST /api/oauth/credentials/CONTA01/start` com `Origin` da aplicação. A resposta traz `connection_id` e `authorize_url`; a interface abre a URL no navegador. O OAuth Codex atual redireciona para `http://localhost:1455/auth/callback`. Após o redirecionamento, a interface pede ao responsável que cole a URL completa, mesmo que a página local não abra, e envia `{"callback_url":"..."}` a `POST /api/oauth/connections/CONNECTION_ID/complete`. O estado expira em dez minutos e só pode ser usado uma vez pela mesma sessão. Para renovar a conexão, inicie outro fluxo; uma conta OAuth diferente da já vinculada é recusada.
 
-O chat poderá usar `GET /api/oauth/credentials` para apresentar as credenciais atribuídas e enviar a requisição Codex por `POST /api/credentials/CONTA01/v1/responses` com o cookie interno, `Origin` da aplicação e corpo de Responses. Essa rota registra o colaborador no run; a cota de RPM e o limite diário são compartilhados pela credencial. Os cabeçalhos de sessão do navegador não são enviados ao upstream. As rotas antigas `/v1/*` e suas chaves continuam disponíveis, com runs sem colaborador interno. O frontend de chat e a entidade de conversas entram na etapa seguinte.
+O cliente pode usar `GET /api/oauth/credentials` para apresentar as credenciais atribuídas. A rota de baixo nível `POST /api/credentials/CONTA01/v1/responses` continua disponível com cookie interno e `Origin` da aplicação; o chat da fase 3 usa a API descrita abaixo. As rotas antigas `/v1/*` e suas chaves continuam disponíveis, com runs sem colaborador interno.
+
+## Chat e histórico da fase 3
+
+Depois de `python -m alembic upgrade head`, o colaborador com senha definitiva e credencial OAuth atribuída envia uma mensagem por `POST /api/chat/messages`. A requisição usa o cookie interno e o `Origin` da aplicação:
+
+```json
+{
+  "client_message_id": "e557feef-058e-45d5-9579-8251a2cc9fb9",
+  "credential_id": "CONTA01",
+  "model": "gpt-6-sol",
+  "text": "Olá"
+}
+```
+
+A resposta repassa os eventos SSE do Codex e inclui `X-Conversation-ID` e `X-Run-ID`. O backend mantém uma conversa por colaborador nesta fase. Para cada envio, ele reconstrói o contexto a partir das respostas completas da própria conversa e grava o prompt, a resposta e os eventos no PostgreSQL. Mensagens de colaboradores que compartilham uma credencial permanecem em conversas distintas. O identificador `client_message_id` pertence a uma mensagem: repeti-lo depois de uma admissão retorna `409 duplicate_message` sem novo envio ao upstream.
+
+Se o token exigir reconexão antes da admissão, a API retorna `409` com `code: reconnect_required` e o mesmo `client_message_id`. O navegador deve manter o texto, concluir o fluxo em `/api/oauth` e reenviar a mensagem uma vez com o mesmo UUID. Depois que um run é admitido, o backend nunca o reenvia automaticamente, inclusive se a conexão com o upstream falhar e a entrega ficar incerta. O frontend ainda não está implementado; esse comportamento descreve o contrato que ele deve seguir.
+
+`GET /api/chat/history?limit=50&before=RUN_ID` pagina o histórico da própria conta. `GET /api/chat/runs/RUN_ID` traz o prompt, a resposta completa disponível e os eventos capturados. O responsável pela governança usa `GET /api/governance/runs` para listar metadados e `GET /api/governance/runs/RUN_ID` para ler um run completo; cada leitura completa grava uma entrada em `governance_access` antes de responder. Runs antigos sem colaborador continuam fora do histórico individual e disponíveis à governança. O chat inicial aceita texto; anexos e múltiplas conversas na interface ficam para uma etapa posterior.
 
 ## Request de Responses
 

@@ -1,4 +1,5 @@
 import codecs
+import re
 from dataclasses import dataclass, field
 
 from backend.store import StreamEvent
@@ -35,21 +36,16 @@ class EventStreamDecoder:
     def _drain_lines(self, text: str) -> list[StreamEvent]:
         events = []
         start = 0
-        while True:
-            endings = [index for index in (text.find("\r", start), text.find("\n", start)) if index >= 0]
-            if not endings:
-                break
-            index = min(endings)
-            ending = text[index]
-            width = 2 if text[index:index + 2] == "\r\n" else 1
-            self._skip_lf = ending == "\r" and width == 1 and index + 1 == len(text)
+        for match in re.finditer(r"\r\n|[\r\n]", text):
+            index = match.start()
+            self._skip_lf = match.group() == "\r" and match.end() == len(text)
             self._buffer.append(text[start:index])
             line = "".join(self._buffer)
             self._buffer.clear()
             event = self._line(line.removesuffix("\r"))
             if event:
                 events.append(event)
-            start = index + width
+            start = match.end()
         if start < len(text):
             self._buffer.append(text[start:])
         return events

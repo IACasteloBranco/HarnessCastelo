@@ -10,6 +10,7 @@ from backend.store import (QuotaExceeded, RequestRecord, UnavailableAssignment,
 from gateway.forwarder import forward
 from gateway.internal_auth import _check_origin, current_employee, router as internal_auth_router
 from gateway.oauth_connection import router as oauth_router
+from gateway.chat import router as chat_router, governance_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -19,6 +20,8 @@ logging.basicConfig(
 app = FastAPI()
 app.include_router(internal_auth_router)
 app.include_router(oauth_router)
+app.include_router(chat_router)
+app.include_router(governance_router)
 
 
 @app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])

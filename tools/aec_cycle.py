@@ -34,7 +34,7 @@ GATE = CommandGate(
     argv=(
         sys.executable, "-m", "unittest", "-v",
         "gateway.tests.test_proxy", "backend.tests.test_store", "gateway.tests.test_internal_auth",
-        "gateway.tests.test_shared_oauth",
+        "gateway.tests.test_shared_oauth", "gateway.tests.test_chat",
     ),
 )
 

@@ -44,6 +44,13 @@ class RequestRecord:
 
 
 @dataclass(frozen=True)
+class ChatRun:
+    conversation_id: UUID
+    client_message_id: UUID
+    text: str
+
+
+@dataclass(frozen=True)
 class StreamEvent:
     ordinal: int
     event_type: str
@@ -141,24 +148,43 @@ async def admit(client_key: str, request: RequestRecord) -> AdmittedRun:
 
 async def admit_employee(employee_id: UUID, credential_id: str, request: RequestRecord) -> AdmittedRun:
     async with session_factory()() as session, session.begin():
-        ref = await session.scalar(select(CredentialRecord.user_id).where(
-            CredentialRecord.credential_id == credential_id))
-        if ref is None:
-            raise UnavailableAssignment
-        account = await session.scalar(select(Account).where(Account.user_id == ref).with_for_update())
-        credential = await session.scalar(select(CredentialRecord).where(
-            CredentialRecord.credential_id == credential_id).with_for_update())
-        assignment = await session.get(EmployeeCredential, (employee_id, credential_id))
-        employee = await session.get(Employee, employee_id)
-        if (not account or account.disabled or not credential or credential.revoked
-                or not credential.token_ciphertext or not assignment or not employee
-                or employee.disabled or employee.must_change_password):
-            raise UnavailableAssignment
+        credential = await _locked_employee_credential(session, employee_id, credential_id)
         return await _record_run(session, credential, request, employee_id)
 
 
+async def credential_for_employee(employee_id: UUID, credential_id: str) -> Credential:
+    async with session_factory()() as session:
+        credential = await session.get(CredentialRecord, credential_id)
+        account = await session.get(Account, credential.user_id) if credential else None
+        assignment = await session.get(EmployeeCredential, (employee_id, credential_id))
+        employee = await session.get(Employee, employee_id)
+        if (not account or account.disabled or not credential or credential.revoked
+                or not assignment or not employee
+                or employee.disabled or employee.must_change_password):
+            raise UnavailableAssignment
+        return _credential(credential)
+
+
+async def _locked_employee_credential(session, employee_id: UUID,
+                                      credential_id: str) -> CredentialRecord:
+    ref = await session.scalar(select(CredentialRecord.user_id).where(
+        CredentialRecord.credential_id == credential_id))
+    if ref is None:
+        raise UnavailableAssignment
+    account = await session.scalar(select(Account).where(Account.user_id == ref).with_for_update())
+    credential = await session.scalar(select(CredentialRecord).where(
+        CredentialRecord.credential_id == credential_id).with_for_update())
+    assignment = await session.get(EmployeeCredential, (employee_id, credential_id))
+    employee = await session.get(Employee, employee_id)
+    if (not account or account.disabled or not credential or credential.revoked
+            or not credential.token_ciphertext or not assignment or not employee
+            or employee.disabled or employee.must_change_password):
+        raise UnavailableAssignment
+    return credential
+
+
 async def _record_run(session, credential: CredentialRecord, request: RequestRecord,
-                      employee_id: UUID | None) -> AdmittedRun:
+                      employee_id: UUID | None, chat: ChatRun | None = None) -> AdmittedRun:
     now = datetime.now(timezone.utc)
     day_start = datetime.combine(now.date(), time.min, tzinfo=timezone.utc)
     run_id = uuid4()
@@ -188,6 +214,9 @@ async def _record_run(session, credential: CredentialRecord, request: RequestRec
 
     session.add(Run(
         id=run_id, credential_id=credential.credential_id, employee_id=employee_id,
+        conversation_id=chat.conversation_id if chat else None,
+        client_message_id=chat.client_message_id if chat else None,
+        chat_prompt=chat.text if chat else None,
         started_at=now, method=request.method, path=request.path,
         model=payload.get("model") if isinstance(payload, dict) else None,
         request_body=body_text,

@@ -23,6 +23,13 @@ class ProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[0].data, '{"response": {}}')
         self.assertTrue(events[0].complete)
 
+    def test_many_lf_delimited_events_in_one_chunk(self):
+        decoder = EventStreamDecoder()
+        events = decoder.feed(b"data: x\n\n" * 8000)
+        self.assertEqual(len(events), 8000)
+        self.assertEqual(events[-1].ordinal, 7999)
+        self.assertTrue(all(event.data == "x" for event in events))
+
     def test_long_fragmented_line_scales_with_its_size(self):
         def decode(size):
             data = b"x" * size
