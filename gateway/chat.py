@@ -4,12 +4,15 @@ from uuid import UUID
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ConfigDict
 
 from backend.chat import (ChatConflict, HistoryNotFound, admit_chat, existing_chat_run,
                           employee_history, employee_run, governance_run, governance_runs)
 from backend.internal_auth import EmployeeInfo
+from backend.governance import (GovernanceNotFound, alerts_for_governance,
+                                findings_for_governance)
 from backend.store import QuotaExceeded, UnavailableAssignment, credential_for_employee
 from gateway.auth_store import get_valid_token
 from gateway.forwarder import forward
@@ -123,3 +126,35 @@ async def governance_detail(run_id: UUID, employee: EmployeeInfo = Depends(curre
         return await governance_run(employee.employee_id, run_id)
     except HistoryNotFound:
         raise HTTPException(404, "run not found")
+
+
+@governance_router.get("/runs/{run_id}/export")
+async def governance_export(run_id: UUID, employee: EmployeeInfo = Depends(current_employee)):
+    _ready(employee, "governance")
+    try:
+        data = await governance_run(employee.employee_id, run_id, action="export")
+    except HistoryNotFound:
+        raise HTTPException(404, "run not found")
+    return JSONResponse(content=jsonable_encoder(data), headers={
+        "Content-Disposition": f'attachment; filename="run-{run_id}.json"',
+    })
+
+
+@governance_router.get("/findings")
+async def governance_findings(before: UUID | None = None, limit: int = Query(50, ge=1, le=50),
+                              employee: EmployeeInfo = Depends(current_employee)):
+    _ready(employee, "governance")
+    try:
+        return {"findings": await findings_for_governance(employee.employee_id, before, limit)}
+    except GovernanceNotFound:
+        raise HTTPException(404, "finding cursor not found")
+
+
+@governance_router.get("/alerts")
+async def governance_alerts(before: UUID | None = None, limit: int = Query(50, ge=1, le=50),
+                            employee: EmployeeInfo = Depends(current_employee)):
+    _ready(employee, "governance")
+    try:
+        return {"alerts": await alerts_for_governance(employee.employee_id, before, limit)}
+    except GovernanceNotFound:
+        raise HTTPException(404, "alert cursor not found")

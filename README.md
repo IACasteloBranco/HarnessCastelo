@@ -125,6 +125,20 @@ Se o token exigir reconexão antes da admissão, a API retorna `409` com `code: 
 
 `GET /api/chat/history?limit=50&before=RUN_ID` pagina o histórico da própria conta. `GET /api/chat/runs/RUN_ID` traz o prompt, a resposta completa disponível e os eventos capturados. O responsável pela governança usa `GET /api/governance/runs` para listar metadados e `GET /api/governance/runs/RUN_ID` para ler um run completo; cada leitura completa grava uma entrada em `governance_access` antes de responder. Runs antigos sem colaborador continuam fora do histórico individual e disponíveis à governança. O chat inicial aceita texto; anexos e múltiplas conversas na interface ficam para uma etapa posterior.
 
+## Análise e alertas da fase 4
+
+O backend analisa a mensagem nova antes de encaminhá-la. O chat e as rotas de proxy usam o mesmo ponto de admissão. A análise registra achados sem bloquear a mensagem. As regras atuais marcam cabeçalhos de chave privada PEM como alta confiança; padrões de CPF, CNPJ e pedidos explícitos para ignorar instruções ficam para revisão. Os achados guardam categoria, regra e confiança, sem copiar trechos do prompt.
+
+O responsável pela governança consulta metadados em `GET /api/governance/findings` e o estado das notificações em `GET /api/governance/alerts`. Ambas as rotas aceitam `limit` e `before` para paginação. `GET /api/governance/runs/RUN_ID/export` baixa o conteúdo bruto em JSON e registra `action=export` em `governance_access`. A leitura normal do run continua registrando `action=read`.
+
+Cada achado de alta confiança cria um alerta pendente na mesma transação do run. O processo de envio usa SMTP com TLS implícito e precisa destas variáveis protegidas: `GOVERNANCE_ALERT_EMAIL`, `ALERT_SMTP_HOST`, `ALERT_SMTP_FROM` e, se o servidor exigir login, `ALERT_SMTP_USERNAME` e `ALERT_SMTP_PASSWORD`. `ALERT_SMTP_PORT` usa 465 por padrão. Depois de configurar as variáveis no ambiente do serviço, execute o processo separado:
+
+```bash
+.venv/bin/python -m backend.scripts.deliver_alerts --loop
+```
+
+Sem `--loop`, o comando processa um alerta pendente e termina. O processo contínuo consulta a fila a cada cinco segundos quando ela está vazia. Falhas de SMTP deixam o alerta no PostgreSQL e programam outra tentativa; o chat não aguarda o e-mail. O e-mail contém somente a categoria e a rota protegida do run. Uma queda após a aceitação pelo SMTP e antes do registro de sucesso pode causar um envio repetido. A remoção dos dados brutos e dos achados após 90 dias pertence à fase 5.
+
 ## Request de Responses
 
 O backend exige `input` como lista e `stream: true`:
@@ -157,7 +171,7 @@ python -m venv .venv
 .venv/bin/aec --help
 ```
 
-O comando `scan` usa o Codex CLI para um QA inicial em modo somente leitura. Ele só chama o implementador quando o QA relata um defeito reproduzido de lógica ou eficiência em um módulo Python existente. O ciclo adversarial usa worktrees separadas e os doze testes atuais como quality gate. Sete testes precisam de um PostgreSQL descartável com as migrações aplicadas. Em um terminal, inicie o banco:
+O comando `scan` usa o Codex CLI para um QA inicial em modo somente leitura. Ele só chama o implementador quando o QA relata um defeito reproduzido de lógica ou eficiência em um módulo Python existente. O ciclo adversarial usa worktrees separadas e a suíte existente como quality gate. Os testes de banco precisam de um PostgreSQL descartável com as migrações aplicadas. Em um terminal, inicie o banco:
 
 ```bash
 docker run --rm --name harnesscastelo-aec-pg -e POSTGRES_PASSWORD=test -p 127.0.0.1:55433:5432 postgres:17-alpine

@@ -162,7 +162,9 @@ async def governance_runs(actor_id: UUID, before: UUID | None, limit: int) -> li
                  "started_at": run.started_at} for run in runs]
 
 
-async def governance_run(actor_id: UUID, run_id: UUID) -> dict:
+async def governance_run(actor_id: UUID, run_id: UUID, action: str = "read") -> dict:
+    if action not in ("read", "export"):
+        raise ValueError("invalid governance action")
     async with session_factory()() as session, session.begin():
         actor = await session.get(Employee, actor_id)
         if actor is None or actor.disabled or actor.must_change_password or actor.role != "governance":
@@ -175,7 +177,7 @@ async def governance_run(actor_id: UUID, run_id: UUID) -> dict:
         events = (await session.scalars(select(RunEvent).where(
             RunEvent.run_id == run_id).order_by(RunEvent.ordinal))).all()
         session.add(GovernanceAccess(id=uuid4(), actor_employee_id=actor_id,
-                                     run_id=run_id, action="read",
+                                     run_id=run_id, action=action,
                                      accessed_at=datetime.now(timezone.utc)))
         await session.flush()
         return {**_summary(run), "employee_id": run.employee_id,

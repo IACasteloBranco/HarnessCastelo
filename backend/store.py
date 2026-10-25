@@ -11,6 +11,7 @@ from cryptography.fernet import Fernet
 from sqlalchemy import func, select
 
 from backend.database import Account, ClientKey, CredentialRecord, Employee, EmployeeCredential, Run, RunEvent, session_factory
+from backend.governance import current_prompt, queue_findings
 
 
 @dataclass(frozen=True)
@@ -222,6 +223,7 @@ async def _record_run(session, credential: CredentialRecord, request: RequestRec
         request_body=body_text,
         request_json=payload if isinstance(payload, (dict, list)) else None,
     ))
+    await queue_findings(session, run_id, chat.text if chat else current_prompt(payload, request.path), now)
     return AdmittedRun(run_id, _credential(credential))
 
 

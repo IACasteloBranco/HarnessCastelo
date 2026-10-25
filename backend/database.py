@@ -168,6 +168,36 @@ class GovernanceAccess(Base):
     accessed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class PromptFinding(Base):
+    __tablename__ = "prompt_findings"
+    __table_args__ = (UniqueConstraint("run_id", "rule_id"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    run_id: Mapped[UUID] = mapped_column(ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    category: Mapped[str] = mapped_column(String(64), nullable=False)
+    rule_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    confidence: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class AlertOutbox(Base):
+    __tablename__ = "alert_outbox"
+    __table_args__ = (
+        CheckConstraint("status IN ('pending', 'leased', 'sent')", name="ck_alert_outbox_status"),
+        Index("ix_alert_outbox_due", "status", "next_attempt_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    finding_id: Mapped[UUID] = mapped_column(ForeignKey("prompt_findings.id", ondelete="CASCADE"), unique=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+
 class InternalSession(Base):
     __tablename__ = "internal_sessions"
     __table_args__ = (Index("ix_internal_sessions_expires_at", "expires_at"),)
