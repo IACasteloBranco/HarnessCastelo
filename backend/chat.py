@@ -1,7 +1,7 @@
 """Employee chat, local context, and audited governance reads."""
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 from sqlalchemy import or_, select, tuple_
@@ -75,7 +75,8 @@ async def admit_chat(employee_id: UUID, credential_id: str, client_message_id: U
             raise ChatConflict("conversation_busy")
 
         prior = (await session.scalars(select(Run).where(
-            Run.conversation_id == conversation.id, Run.outcome == "completed"
+            Run.conversation_id == conversation.id, Run.outcome == "completed",
+            Run.started_at >= datetime.now(timezone.utc) - timedelta(days=90)
         ).order_by(Run.started_at, Run.id))).all()
         input_items = []
         for run in prior:

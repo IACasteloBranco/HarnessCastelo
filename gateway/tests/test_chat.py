@@ -8,17 +8,18 @@ from uuid import UUID, uuid4
 
 import httpx
 from cryptography.fernet import Fernet
-from sqlalchemy import delete, select
+from sqlalchemy import delete, event, select
 
-from backend.database import (Account, AlertOutbox, ClientKey, Conversation, CredentialRecord, Department,
+from backend.database import (Account, AlertOutbox, ClientKey, Conversation, CredentialRecord, DailyFinding, DailyUsage, Department,
                               Employee, EmployeeCredential, GovernanceAccess, PromptFinding,
-                              InternalSession, Organization, Run, _session_factory,
+                              InternalSession, Organization, Run, RunEvent, _session_factory,
                               session_factory)
 from backend.internal_auth import provision_department, provision_employee, provision_organization
 from backend.chat import ChatConflict, admit_chat
 from backend.governance import (ClaimedAlert, SMTPConfig, _claim_due, _finish_alert,
                                 _send_email, current_prompt, deliver_due, scan_prompt)
 from backend.shared_oauth import assign_credential, create_shared_credential
+from backend.retention import retain_daily, retain_once
 from backend.store import RequestRecord, TokenBundle, _encode_tokens, admit, issue_client_key
 from gateway.main import app
 
@@ -85,6 +86,8 @@ class ChatTests(unittest.IsolatedAsyncioTestCase):
             await client.aclose()
         async with session_factory()() as session, session.begin():
             org_id = await session.scalar(select(Organization.id).where(Organization.code == self.org))
+            await session.execute(delete(DailyFinding).where(DailyFinding.organization_code == str(org_id)))
+            await session.execute(delete(DailyUsage).where(DailyUsage.organization_code == str(org_id)))
             employee_ids = select(Employee.id).where(Employee.organization_id == org_id)
             await session.execute(delete(GovernanceAccess).where(
                 GovernanceAccess.actor_employee_id.in_(employee_ids)))
@@ -137,6 +140,11 @@ class ChatTests(unittest.IsolatedAsyncioTestCase):
             {"role": "assistant", "content": "answer-1"},
             {"role": "user", "content": "Como vai?"},
         ])
+        async with session_factory()() as session:
+            stored = await session.get(Run, UUID(second.headers["x-run-id"]))
+            self.assertEqual(stored.request_json["input"], [
+                {"role": "user", "content": "Como vai?"},
+            ])
         other = await self._send(self.clients[1], self._body("Outra pessoa"), upstream)
         self.assertEqual(other.status_code, 200)
         self.assertNotEqual(other.headers["x-conversation-id"], first_conversation)
@@ -278,6 +286,108 @@ class ChatTests(unittest.IsolatedAsyncioTestCase):
             {"role": "user", "content": "novo texto comum"}]}).encode()))
         async with session_factory()() as session:
             self.assertIsNone(await session.scalar(select(PromptFinding.id).where(PromptFinding.run_id == legacy.run_id)))
+
+    async def test_retention_archives_metrics_and_removes_raw_without_double_counting(self):
+        async with session_factory()() as session:
+            employee_id = await session.scalar(select(Employee.id).where(Employee.code == self.first))
+            department_id = await session.scalar(select(Department.id).where(Department.code == self.dept))
+        old = await admit_chat(employee_id, self.credential, uuid4(), "test-model",
+                               "-----BEGIN PRIVATE KEY-----")
+        async with session_factory()() as session, session.begin():
+            first = await session.get(Run, old[0].run_id)
+            first.outcome = "completed"
+            first.response_json = {"output": [{"type": "message", "role": "assistant",
+                "content": [{"type": "output_text", "text": "ack"}]}]}
+            first.finished_at = datetime.now(timezone.utc)
+        recent = await admit_chat(employee_id, self.credential, uuid4(), "test-model", "recent")
+        now = datetime.now(timezone.utc)
+        old_day = (now - timedelta(days=91)).date()
+        async with session_factory()() as session, session.begin():
+            expired = await session.get(Run, old[0].run_id)
+            expired.started_at = now - timedelta(days=91)
+            expired.finished_at = expired.started_at + timedelta(milliseconds=125)
+            expired.outcome = "failed"
+            expired.http_status = 502
+            session.add(RunEvent(run_id=expired.id, ordinal=0, event_type="response.body",
+                                 data="sensitive event"))
+            active = await session.get(Run, recent[0].run_id)
+            active.outcome = "completed"
+            active.finished_at = now
+        report_url = f"/api/governance/reports/daily?start={old_day}&end={now.date()}"
+        self.assertEqual((await self.clients[0].get(report_url)).status_code, 403)
+        before = (await self.clients[2].get(report_url)).json()
+        own_usage = [row for row in before["usage"] if row["department"] == self.dept]
+        own_findings = [row for row in before["findings"] if row["department"] == self.dept]
+        self.assertEqual(sum(row["runs"] for row in own_usage), 2)
+        self.assertGreaterEqual(await retain_daily(now), 1)
+        self.assertEqual(await retain_daily(now), 0)
+        after = (await self.clients[2].get(report_url)).json()
+        self.assertEqual([row for row in after["usage"] if row["department"] == self.dept], own_usage)
+        self.assertEqual([row for row in after["findings"] if row["department"] == self.dept], own_findings)
+        self.assertEqual((await self.clients[0].get(f"/api/chat/runs/{old[0].run_id}")).status_code, 404)
+        self.assertEqual((await self.clients[2].get(f"/api/governance/runs/{old[0].run_id}")).status_code, 404)
+        self.assertEqual((await self.clients[2].get(report_url.replace("/daily?", "/daily/export?"))).status_code, 200)
+        async with session_factory()() as session:
+            self.assertIsNone(await session.get(RunEvent, (old[0].run_id, 0)))
+            self.assertIsNone(await session.scalar(select(PromptFinding.id).where(
+                PromptFinding.run_id == old[0].run_id)))
+            self.assertEqual((await session.get(DailyUsage, (str((await session.get(Employee, employee_id)).organization_id),
+                                                          str(department_id), old_day))).errors, 1)
+        async with session_factory()() as session, session.begin():
+            archived_usage = await session.get(DailyUsage, (str((await session.get(Employee, employee_id)).organization_id),
+                                                              str(department_id), old_day))
+            archived_usage.expires_at = now - timedelta(days=1)
+            archived_findings = await session.get(DailyFinding, (archived_usage.organization_code,
+                archived_usage.department_code, old_day, "sensitive_data"))
+            archived_findings.expires_at = now - timedelta(days=1)
+        self.assertEqual(await retain_daily(now), 0)
+        async with session_factory()() as session:
+            self.assertIsNone(await session.get(DailyUsage, (archived_usage.organization_code,
+                                                             archived_usage.department_code, old_day)))
+            self.assertIsNone(await session.get(DailyFinding, (archived_usage.organization_code,
+                                                               archived_usage.department_code, old_day,
+                                                               "sensitive_data")))
+
+    async def test_retention_rolls_back_aggregate_if_run_delete_fails(self):
+        now = datetime.now(timezone.utc)
+        run_id = uuid4()
+        async with session_factory()() as session, session.begin():
+            employee = await session.scalar(select(Employee).where(Employee.code == self.first))
+            session.add(Run(id=run_id, credential_id=self.credential, employee_id=employee.id,
+                            organization_id=employee.organization_id, department_id=employee.department_id,
+                            started_at=now - timedelta(days=92), finished_at=now - timedelta(days=92),
+                            method="POST", path="responses", request_body="secret",
+                            outcome="failed", http_status=500))
+
+        def fail_delete(_connection, _cursor, statement, _parameters, _context, _many):
+            if statement.startswith("DELETE FROM runs"):
+                raise RuntimeError("simulated delete failure")
+
+        engine = session_factory().kw["bind"].sync_engine
+        event.listen(engine, "before_cursor_execute", fail_delete)
+        try:
+            with self.assertRaisesRegex(RuntimeError, "simulated delete failure"):
+                await retain_once(now)
+        finally:
+            event.remove(engine, "before_cursor_execute", fail_delete)
+        async with session_factory()() as session:
+            self.assertIsNotNone(await session.get(Run, run_id))
+            self.assertIsNone(await session.get(DailyUsage, (str(employee.organization_id),
+                                                               str(employee.department_id),
+                                                               (now - timedelta(days=92)).date())))
+
+    async def test_expired_prompt_is_not_reused_as_chat_context(self):
+        async with session_factory()() as session:
+            employee_id = await session.scalar(select(Employee.id).where(Employee.code == self.first))
+        old, _, _ = await admit_chat(employee_id, self.credential, uuid4(), "test-model", "expired secret")
+        async with session_factory()() as session, session.begin():
+            run = await session.get(Run, old.run_id)
+            run.started_at = datetime.now(timezone.utc) - timedelta(days=91)
+            run.outcome = "completed"
+            run.response_json = {"output": [{"type": "message", "role": "assistant",
+                "content": [{"type": "output_text", "text": "old answer"}]}]}
+        _, _, body = await admit_chat(employee_id, self.credential, uuid4(), "test-model", "fresh")
+        self.assertEqual(json.loads(body)["input"], [{"role": "user", "content": "fresh"}])
 
     def test_email_contains_only_category_and_protected_reference(self):
         class SMTP:

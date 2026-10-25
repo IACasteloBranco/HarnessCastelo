@@ -2,10 +2,10 @@ import asyncio
 import os
 import sys
 from functools import lru_cache
-from datetime import datetime
+from datetime import date, datetime
 from uuid import UUID
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Index, Integer, LargeBinary, String, Text, UniqueConstraint, Uuid, text
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, Date, DateTime, ForeignKey, ForeignKeyConstraint, Index, Integer, LargeBinary, String, Text, UniqueConstraint, Uuid, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -76,6 +76,8 @@ class Run(Base):
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
     credential_id: Mapped[str] = mapped_column(ForeignKey("credentials.credential_id"), nullable=False)
     employee_id: Mapped[UUID | None] = mapped_column(ForeignKey("employees.id"), nullable=True, index=True)
+    organization_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    department_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     conversation_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True, index=True)
     client_message_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     chat_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -178,6 +180,30 @@ class PromptFinding(Base):
     rule_id: Mapped[str] = mapped_column(String(64), nullable=False)
     confidence: Mapped[str] = mapped_column(String(16), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class DailyUsage(Base):
+    __tablename__ = "daily_usage"
+
+    organization_code: Mapped[str] = mapped_column(String(64), primary_key=True)
+    department_code: Mapped[str] = mapped_column(String(64), primary_key=True)
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    runs: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    errors: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    latency_ms: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    latency_samples: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class DailyFinding(Base):
+    __tablename__ = "daily_findings"
+
+    organization_code: Mapped[str] = mapped_column(String(64), primary_key=True)
+    department_code: Mapped[str] = mapped_column(String(64), primary_key=True)
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    category: Mapped[str] = mapped_column(String(64), primary_key=True)
+    findings: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class AlertOutbox(Base):

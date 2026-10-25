@@ -1,5 +1,6 @@
 """Session-bound chat and history APIs."""
 
+from datetime import date
 from uuid import UUID
 
 import httpx
@@ -14,6 +15,7 @@ from backend.internal_auth import EmployeeInfo
 from backend.governance import (GovernanceNotFound, alerts_for_governance,
                                 findings_for_governance)
 from backend.store import QuotaExceeded, UnavailableAssignment, credential_for_employee
+from backend.retention import governance_report
 from gateway.auth_store import get_valid_token
 from gateway.forwarder import forward
 from gateway.internal_auth import _check_origin, current_employee
@@ -158,3 +160,26 @@ async def governance_alerts(before: UUID | None = None, limit: int = Query(50, g
         return {"alerts": await alerts_for_governance(employee.employee_id, before, limit)}
     except GovernanceNotFound:
         raise HTTPException(404, "alert cursor not found")
+
+
+@governance_router.get("/reports/daily")
+async def governance_daily_report(start: date, end: date,
+                                  employee: EmployeeInfo = Depends(current_employee)):
+    _ready(employee, "governance")
+    try:
+        return await governance_report(employee.employee_id, start, end)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@governance_router.get("/reports/daily/export")
+async def governance_daily_export(start: date, end: date,
+                                  employee: EmployeeInfo = Depends(current_employee)):
+    _ready(employee, "governance")
+    try:
+        data = await governance_report(employee.employee_id, start, end)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return JSONResponse(content=jsonable_encoder(data), headers={
+        "Content-Disposition": f'attachment; filename="governance-{start}-{end}.json"',
+    })

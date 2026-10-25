@@ -156,7 +156,9 @@ O backend exige `input` como lista e `stream: true`:
 
 - `TOKEN_ENCRYPTION_KEY` criptografa os tokens OAuth antes de gravá-los no PostgreSQL.
 - As chaves de cliente são guardadas somente como hashes.
-- Os prompts e dados completos dos eventos de resposta ficam no banco para uso do harness. Restrinja o acesso ao banco e aplique a política de retenção adequada ao conteúdo.
+- Os prompts e dados completos dos eventos de resposta ficam no banco por até 90 dias. Agende diariamente `python -m backend.scripts.retain` com `DATABASE_URL` configurada. O comando consolida métricas diárias antes de apagar runs vencidos, eventos, achados e alertas associados na mesma transação; repeti-lo não duplica métricas. Agregados expiram após 12 meses. O agendamento e seus logs pertencem à infraestrutura de implantação.
+- A governança consulta `GET /api/governance/reports/daily?start=AAAA-MM-DD&end=AAAA-MM-DD` e exporta o mesmo JSON em `/api/governance/reports/daily/export`. O relatório combina dados recentes com agregados arquivados e não contém identidade de colaborador.
+- A migração `0006_retention_aggregates` remove cópias de turnos anteriores das requisições de chat já armazenadas; novos runs também guardam só o turno corrente, enquanto o contexto completo continua sendo enviado ao upstream. Faça backup antes de aplicar essa migração em qualquer base persistente.
 - `.env`, os registros JSON locais e os arquivos OAuth locais são ignorados pelo Git.
 - O login OAuth continua ocorrendo no navegador; os tokens importados e os novos ficam associados ao `user_id` informado.
 

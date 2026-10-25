@@ -194,6 +194,13 @@ async def _record_run(session, credential: CredentialRecord, request: RequestRec
         payload = json.loads(body_text) if body_text else None
     except json.JSONDecodeError:
         payload = None
+    if chat:
+        stored_payload = {"model": payload.get("model") if isinstance(payload, dict) else None,
+                          "input": [{"role": "user", "content": chat.text}]}
+        body_text = json.dumps(stored_payload, ensure_ascii=False)
+    else:
+        stored_payload = payload
+    employee = await session.get(Employee, employee_id) if employee_id else None
 
     rpm_count = await session.scalar(
             select(func.count(Run.id)).where(
@@ -215,13 +222,15 @@ async def _record_run(session, credential: CredentialRecord, request: RequestRec
 
     session.add(Run(
         id=run_id, credential_id=credential.credential_id, employee_id=employee_id,
+        organization_id=employee.organization_id if employee else None,
+        department_id=employee.department_id if employee else None,
         conversation_id=chat.conversation_id if chat else None,
         client_message_id=chat.client_message_id if chat else None,
         chat_prompt=chat.text if chat else None,
         started_at=now, method=request.method, path=request.path,
         model=payload.get("model") if isinstance(payload, dict) else None,
         request_body=body_text,
-        request_json=payload if isinstance(payload, (dict, list)) else None,
+        request_json=stored_payload if isinstance(stored_payload, (dict, list)) else None,
     ))
     await queue_findings(session, run_id, chat.text if chat else current_prompt(payload, request.path), now)
     return AdmittedRun(run_id, _credential(credential))
