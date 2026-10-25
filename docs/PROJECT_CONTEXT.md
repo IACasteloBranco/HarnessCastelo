@@ -4,7 +4,7 @@ Este documento reúne fatos do repositório e objetivos já descritos pelo respo
 
 ## Objetivo informado
 
-O HarnessCastelo é um projeto interno para criar um harness próprio. O valor central esperado é a governança das interações entre colaboradores e modelos de IA.
+O HarnessCastelo é um projeto interno para criar um harness próprio, apresentado aos colaboradores como **Maximus AI**. O valor central esperado é a governança das interações entre colaboradores e modelos de IA.
 
 O gateway deverá analisar prompts para detectar padrões potencialmente nocivos. O banco próprio deverá armazenar interações e dados sobre o uso da ferramenta pelos colaboradores.
 

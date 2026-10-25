@@ -1,3 +1,3 @@
-# Frontend
+# Frontend do Maximus AI
 
-O frontend ficará aqui depois que os requisitos do projeto e os contratos do backend forem alinhados em `docs/`.
+A implementação seguirá o [roadmap do frontend](../docs/FRONTEND_ROADMAP.md). O primeiro produto visível será o chat do colaborador; o console de governança virá depois.
