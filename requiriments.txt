@@ -6,3 +6,8 @@ SQLAlchemy[asyncio]>=2.0
 alembic>=1.15
 psycopg[binary]>=3.2
 cryptography>=44
+openpyxl>=3.1,<4
+reportlab>=4.2,<5
+faster-whisper>=1.2,<2
+av>=11,<19
+agentic-engineering-core @ git+https://github.com/EduSobreiraa/Agentic-Engineering-Core-.git@1afaefe94791d1e1683a1d08b89bc5b4a8449c51

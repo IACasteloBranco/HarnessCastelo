@@ -6,3 +6,7 @@ registry/*.json
 __pycache__/
 .venv/
 .tmp/
+.worktrees/
+.playwright-mcp/
+.agents/
+/Códigos dos departamentos.xlsx
