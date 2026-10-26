@@ -1,20 +1,40 @@
 """Session-bound chat and history APIs."""
 
 from datetime import date
-from uuid import UUID
+import asyncio
+import base64
+import binascii
+import hashlib
+import json
+import re
+from pathlib import PurePath
+from typing import Literal
+from urllib.parse import quote
+from uuid import UUID, uuid4
 
 import httpx
+import av
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, ConfigDict
+from fastapi.responses import JSONResponse, Response
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 
-from backend.chat import (ChatConflict, HistoryNotFound, admit_chat, existing_chat_run,
-                          employee_history, employee_run, governance_run, governance_runs)
+from backend.artifacts import InvalidArtifact, build_artifact, preview_table
+from backend.transcription import AudioTooLong, transcribe_local
+from backend.chat import (ChatConflict, HistoryNotFound, admit_chat, artifact_source, claim_title_prompt,
+                          add_context_note, claim_context_source, context_notes, delete_context_note,
+                          release_context_source, save_generated_profile, update_context_note,
+                          update_user_profile, user_profile,
+                          create_project, delete_conversation, delete_project, employee_conversations,
+                          employee_projects, existing_chat_run, move_conversation, rename_project,
+                          employee_artifact, employee_attachment, employee_history, employee_run, governance_run, governance_runs,
+                          release_title_prompt, rename_conversation, save_suggested_title,
+                          save_artifact, suggested_title_response)
 from backend.internal_auth import EmployeeInfo
 from backend.governance import (GovernanceNotFound, alerts_for_governance,
                                 findings_for_governance)
-from backend.store import QuotaExceeded, UnavailableAssignment, credential_for_employee
+from backend.store import (QuotaExceeded, RequestRecord, UnavailableAssignment,
+                           admit_employee, credential_for_employee)
 from backend.retention import governance_report
 from gateway.auth_store import get_valid_token
 from gateway.forwarder import forward
@@ -22,6 +42,28 @@ from gateway.internal_auth import _check_origin, current_employee
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 governance_router = APIRouter(prefix="/api/governance", tags=["governance"])
+transcription_slots = asyncio.Semaphore(1)
+
+
+FILE_TYPES = {
+    ".pdf": "application/pdf", ".txt": "text/plain", ".md": "text/markdown",
+    ".csv": "text/csv", ".tsv": "text/tab-separated-values",
+    ".doc": "application/msword", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".rtf": "application/rtf", ".odt": "application/vnd.oasis.opendocument.text",
+    ".ppt": "application/vnd.ms-powerpoint", ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".xls": "application/vnd.ms-excel", ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".json": "application/json", ".xml": "application/xml", ".html": "text/html",
+    ".py": "text/plain", ".js": "text/plain", ".ts": "text/plain",
+    ".css": "text/plain", ".sql": "text/plain", ".yaml": "text/plain", ".yml": "text/plain",
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".webp": "image/webp", ".gif": "image/gif",
+}
+
+
+class Attachment(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=255)
+    data: str = Field(min_length=1, max_length=70_000_000)
 
 
 class MessageBody(BaseModel):
@@ -30,12 +72,123 @@ class MessageBody(BaseModel):
     client_message_id: UUID
     credential_id: str = Field(min_length=1, max_length=255)
     model: str = Field(min_length=1, max_length=255)
-    text: str = Field(min_length=1, max_length=100000)
+    text: str = Field(max_length=100000)
+    attachments: list[Attachment] = Field(default_factory=list, max_length=5)
+    conversation_id: UUID | None = None
+    new_conversation: bool = False
+    project_id: UUID | None = None
+
+    @model_validator(mode="after")
+    def check_content(self):
+        if not self.text.strip() and not self.attachments:
+            raise ValueError("message is empty")
+        return self
+
+
+def _files(attachments: list[Attachment]) -> tuple[list[dict], list[tuple[dict, bytes]]]:
+    content, files = [], []
+    total = 0
+    for attachment in attachments:
+        name = attachment.name
+        if PurePath(name).name != name or "\\" in name or any(ord(char) < 32 for char in name):
+            raise HTTPException(422, "invalid filename")
+        mime = FILE_TYPES.get(PurePath(name).suffix.lower())
+        if not mime:
+            raise HTTPException(422, "unsupported file type")
+        try:
+            data = base64.b64decode(attachment.data, validate=True)
+        except (ValueError, binascii.Error):
+            raise HTTPException(422, "invalid file data")
+        total += len(data)
+        if not data or total > 50_000_000:
+            raise HTTPException(413, "attachments exceed 50 MB")
+        if mime == "application/pdf" and not data.startswith(b"%PDF-"):
+            raise HTTPException(422, "invalid PDF")
+        if mime.startswith("image/") and not (
+            (mime == "image/png" and data.startswith(b"\x89PNG\r\n\x1a\n")) or
+            (mime == "image/jpeg" and data.startswith(b"\xff\xd8\xff")) or
+            (mime == "image/gif" and data.startswith((b"GIF87a", b"GIF89a"))) or
+            (mime == "image/webp" and data.startswith(b"RIFF") and data[8:12] == b"WEBP")
+        ):
+            raise HTTPException(422, "invalid image")
+        encoded = f"data:{mime};base64,{attachment.data}"
+        content.append({"type": "input_image", "image_url": encoded} if mime.startswith("image/") else
+                       {"type": "input_file", "filename": name, "file_data": encoded})
+        files.append(({"id": str(uuid4()), "name": name, "mime_type": mime,
+                       "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}, data))
+    return content, files
+
+
+class TitleBody(BaseModel):
+    title: str = Field(min_length=1, max_length=60)
+
+
+class ProjectBody(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+
+
+class ProjectAssignmentBody(BaseModel):
+    project_id: UUID | None
+
+
+class ContextBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    scope: Literal["profile", "project", "conversation"]
+    target_id: UUID | None = None
+    kind: Literal["instruction", "memory"]
+    content: str = Field(min_length=1, max_length=1000)
+
+
+class ContextEditBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    content: str = Field(min_length=1, max_length=1000)
+
+
+class ProfileBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    text: str = Field(max_length=3000)
+
+
+class ArtifactBody(BaseModel):
+    format: Literal["csv", "xlsx", "pdf"]
 
 
 def _ready(employee: EmployeeInfo, role: str) -> None:
-    if employee.must_change_password or employee.role != role:
+    allowed = employee.role == role or (role == "governance" and employee.can_govern)
+    if employee.must_change_password or not allowed:
         raise HTTPException(403, "account unavailable")
+
+
+@router.post("/transcriptions")
+async def transcribe_audio(request: Request, employee: EmployeeInfo = Depends(current_employee)):
+    _check_origin(request)
+    _ready(employee, "collaborator")
+    if PurePath(request.headers.get("X-Audio-Filename", "")).suffix.lower() not in (
+        ".mp3", ".mp4", ".mpeg", ".mpga", ".m4a", ".wav", ".webm", ".ogg", ".opus"
+    ):
+        raise HTTPException(422, "Formato de áudio não aceito.")
+    chunks = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > 25_000_000:
+            raise HTTPException(413, "O áudio deve ter até 25 MB.")
+        chunks.append(chunk)
+    data = b"".join(chunks)
+    if not data:
+        raise HTTPException(422, "O arquivo de áudio está vazio.")
+    try:
+        async with transcription_slots:
+            text = await asyncio.to_thread(transcribe_local, data)
+    except AudioTooLong as exc:
+        raise HTTPException(413, str(exc)) from exc
+    except av.InvalidDataError as exc:
+        raise HTTPException(422, "Não foi possível ler o áudio.") from exc
+    except Exception as exc:
+        raise HTTPException(503, "A transcrição local está indisponível.") from exc
+    if not text:
+        raise HTTPException(422, "Nenhuma fala foi detectada no áudio.")
+    return {"text": text}
 
 
 @router.post("/messages")
@@ -43,8 +196,7 @@ async def send_message(body: MessageBody, request: Request,
                        employee: EmployeeInfo = Depends(current_employee)):
     _check_origin(request)
     _ready(employee, "collaborator")
-    if not body.text.strip():
-        raise HTTPException(422, "message is empty")
+    file_content, files = _files(body.attachments)
     duplicate = await existing_chat_run(employee.employee_id, body.client_message_id)
     if duplicate:
         raise HTTPException(409, {"code": "duplicate_message", "run_id": str(duplicate)})
@@ -76,7 +228,8 @@ async def send_message(body: MessageBody, request: Request,
     try:
         admitted, conversation_id, request_body = await admit_chat(
             employee.employee_id, body.credential_id, body.client_message_id,
-            body.model, body.text,
+            body.model, body.text or "Analise os arquivos anexados.", body.conversation_id, body.new_conversation,
+            file_content, files, body.project_id,
         )
     except UnavailableAssignment:
         raise HTTPException(403, "credential unavailable")
@@ -93,13 +246,339 @@ async def send_message(body: MessageBody, request: Request,
 
 
 @router.get("/history")
-async def history(before: UUID | None = None, limit: int = Query(50, ge=1, le=50),
+async def history(before: UUID | None = None, conversation_id: UUID | None = None,
+                  limit: int = Query(50, ge=1, le=50),
                   employee: EmployeeInfo = Depends(current_employee)):
     _ready(employee, "collaborator")
     try:
-        return await employee_history(employee.employee_id, before, limit)
+        return await employee_history(employee.employee_id, before, limit, conversation_id)
     except HistoryNotFound:
         raise HTTPException(404, "history cursor not found")
+
+
+@router.get("/attachments/{attachment_id}")
+async def download_attachment(attachment_id: UUID,
+                              employee: EmployeeInfo = Depends(current_employee)):
+    _ready(employee, "collaborator")
+    try:
+        name, mime, data = await employee_attachment(employee.employee_id, attachment_id)
+    except HistoryNotFound:
+        raise HTTPException(404, "attachment not found")
+    return Response(data, media_type=mime, headers={
+        "Content-Disposition": f"attachment; filename=download; filename*=UTF-8''{quote(name)}",
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff",
+    })
+
+
+@router.get("/attachments/{attachment_id}/preview")
+async def preview_attachment(attachment_id: UUID,
+                             employee: EmployeeInfo = Depends(current_employee)):
+    _ready(employee, "collaborator")
+    try:
+        name, mime, data = await employee_attachment(employee.employee_id, attachment_id)
+    except HistoryNotFound:
+        raise HTTPException(404, "attachment not found")
+    suffix = PurePath(name).suffix.lower()
+    if mime == "application/pdf" or mime.startswith("image/"):
+        return Response(data, media_type=mime, headers={
+            "Content-Disposition": "inline", "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        })
+    try:
+        if suffix in (".csv", ".tsv", ".xlsx"):
+            return JSONResponse(preview_table(suffix[1:], data), headers={"Cache-Control": "private, no-store"})
+        if mime.startswith("text/") or suffix in (".json", ".xml"):
+            return JSONResponse({"text": data[:200_000].decode("utf-8-sig", errors="replace"),
+                                 "truncated": len(data) > 200_000}, headers={"Cache-Control": "private, no-store"})
+    except Exception as exc:
+        raise HTTPException(422, "Não foi possível visualizar este arquivo.") from exc
+    raise HTTPException(415, "Prévia indisponível para este formato.")
+
+
+@router.get("/projects")
+async def projects(employee: EmployeeInfo = Depends(current_employee)):
+    _ready(employee, "collaborator")
+    return {"projects": await employee_projects(employee.employee_id)}
+
+
+@router.get("/context")
+async def get_context(scope: Literal["profile", "project", "conversation"],
+                      response: Response, target_id: UUID | None = None,
+                      employee: EmployeeInfo = Depends(current_employee)):
+    _ready(employee, "collaborator")
+    response.headers["Cache-Control"] = "private, no-store"
+    try:
+        return {"notes": await context_notes(employee.employee_id, scope, target_id)}
+    except HistoryNotFound:
+        raise HTTPException(404, "context scope not found")
+
+
+@router.get("/profile")
+async def get_profile(response: Response, employee: EmployeeInfo = Depends(current_employee)):
+    _ready(employee, "collaborator")
+    response.headers["Cache-Control"] = "private, no-store"
+    return await user_profile(employee.employee_id)
+
+
+@router.patch("/profile")
+async def edit_profile(body: ProfileBody, request: Request,
+                       employee: EmployeeInfo = Depends(current_employee)):
+    _check_origin(request)
+    _ready(employee, "collaborator")
+    return await update_user_profile(employee.employee_id, body.text.strip())
+
+
+@router.post("/context", status_code=201)
+async def create_context(body: ContextBody, request: Request,
+                         employee: EmployeeInfo = Depends(current_employee)):
+    _check_origin(request)
+    _ready(employee, "collaborator")
+    content = body.content.strip()
+    if not content:
+        raise HTTPException(422, "empty context note")
+    try:
+        return await add_context_note(employee.employee_id, body.scope, body.target_id,
+                                      body.kind, content)
+    except HistoryNotFound:
+        raise HTTPException(404, "context scope not found")
+    except ChatConflict:
+        raise HTTPException(409, "Limite de 30 notas neste contexto.")
+
+
+@router.patch("/context/{note_id}")
+async def edit_context(note_id: UUID, body: ContextEditBody, request: Request,
+                       employee: EmployeeInfo = Depends(current_employee)):
+    _check_origin(request)
+    _ready(employee, "collaborator")
+    content = body.content.strip()
+    if not content:
+        raise HTTPException(422, "empty context note")
+    try:
+        return await update_context_note(employee.employee_id, note_id, content)
+    except HistoryNotFound:
+        raise HTTPException(404, "context note not found")
+
+
+@router.delete("/context/{note_id}", status_code=204)
+async def remove_context(note_id: UUID, request: Request,
+                         employee: EmployeeInfo = Depends(current_employee)):
+    _check_origin(request)
+    _ready(employee, "collaborator")
+    try:
+        await delete_context_note(employee.employee_id, note_id)
+    except HistoryNotFound:
+        raise HTTPException(404, "context note not found")
+
+
+@router.post("/projects", status_code=201)
+async def add_project(body: ProjectBody, request: Request,
+                      employee: EmployeeInfo = Depends(current_employee)):
+    _check_origin(request)
+    _ready(employee, "collaborator")
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(422, "O nome do projeto está vazio.")
+    return await create_project(employee.employee_id, name)
+
+
+@router.patch("/projects/{project_id}")
+async def update_project(project_id: UUID, body: ProjectBody, request: Request,
+                         employee: EmployeeInfo = Depends(current_employee)):
+    _check_origin(request)
+    _ready(employee, "collaborator")
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(422, "O nome do projeto está vazio.")
+    try:
+        return await rename_project(employee.employee_id, project_id, name)
+    except HistoryNotFound:
+        raise HTTPException(404, "project not found")
+
+
+@router.delete("/projects/{project_id}", status_code=204)
+async def remove_project(project_id: UUID, request: Request,
+                         employee: EmployeeInfo = Depends(current_employee)):
+    _check_origin(request)
+    _ready(employee, "collaborator")
+    try:
+        await delete_project(employee.employee_id, project_id)
+    except HistoryNotFound:
+        raise HTTPException(404, "project not found")
+    except ChatConflict:
+        raise HTTPException(409, "Aguarde a resposta terminar antes de excluir o projeto.")
+
+
+@router.get("/conversations")
+async def conversations(q: str = Query("", max_length=200), before: UUID | None = None,
+                        limit: int = Query(50, ge=1, le=50),
+                        project_id: UUID | None = None, unassigned: bool = False,
+                        employee: EmployeeInfo = Depends(current_employee)):
+    _ready(employee, "collaborator")
+    try:
+        return await employee_conversations(employee.employee_id, q, before, limit,
+                                            project_id, unassigned)
+    except HistoryNotFound:
+        raise HTTPException(404, "conversation or project not found")
+
+
+@router.patch("/conversations/{conversation_id}/project")
+async def assign_project(conversation_id: UUID, body: ProjectAssignmentBody, request: Request,
+                         employee: EmployeeInfo = Depends(current_employee)):
+    _check_origin(request)
+    _ready(employee, "collaborator")
+    try:
+        return {"project_id": await move_conversation(employee.employee_id, conversation_id, body.project_id)}
+    except HistoryNotFound:
+        raise HTTPException(404, "conversation or project not found")
+    except ChatConflict:
+        raise HTTPException(409, "Aguarde a resposta terminar antes de mover a conversa.")
+
+
+@router.patch("/conversations/{conversation_id}")
+async def update_title(conversation_id: UUID, body: TitleBody, request: Request,
+                       employee: EmployeeInfo = Depends(current_employee)):
+    _check_origin(request)
+    _ready(employee, "collaborator")
+    title = body.title.strip()
+    if not title:
+        raise HTTPException(422, "title is empty")
+    try:
+        return {"title": await rename_conversation(employee.employee_id, title, conversation_id)}
+    except HistoryNotFound:
+        raise HTTPException(404, "conversation not found")
+
+
+@router.delete("/conversations/{conversation_id}", status_code=204)
+async def remove_conversation(conversation_id: UUID, request: Request,
+                              employee: EmployeeInfo = Depends(current_employee)):
+    _check_origin(request)
+    _ready(employee, "collaborator")
+    try:
+        await delete_conversation(employee.employee_id, conversation_id)
+    except HistoryNotFound:
+        raise HTTPException(404, "conversation not found")
+    except ChatConflict:
+        raise HTTPException(409, "Aguarde a resposta terminar antes de excluir.")
+
+
+@router.post("/conversations/{conversation_id}/suggest-title")
+async def suggest_title(conversation_id: UUID, request: Request,
+                        employee: EmployeeInfo = Depends(current_employee)):
+    _check_origin(request)
+    _ready(employee, "collaborator")
+    try:
+        source = await claim_title_prompt(employee.employee_id, conversation_id)
+    except HistoryNotFound:
+        raise HTTPException(404, "conversation not found")
+    if not source:
+        return {"title": None}
+    prompt, answer, credential_id = source
+    payload = {"model": "gpt-6-luna", "input": [
+        {"role": "system", "content": "Crie um título em português de até 6 palavras para esta conversa. Responda somente com o título, sem aspas."},
+        {"role": "user", "content": f"Pergunta: {prompt[:2000]}\nResposta: {answer[:2000]}"},
+    ], "stream": True, "store": False}
+    body = json.dumps(payload, ensure_ascii=False).encode()
+    try:
+        admitted = await admit_employee(employee.employee_id, credential_id,
+                                        RequestRecord("POST", "responses", body))
+    except UnavailableAssignment:
+        await release_title_prompt(employee.employee_id, conversation_id)
+        raise HTTPException(403, "credential unavailable")
+    except QuotaExceeded as exc:
+        await release_title_prompt(employee.employee_id, conversation_id)
+        raise HTTPException(429, "rate limit exceeded" if exc.kind == "rate" else "daily quota exceeded")
+    try:
+        response = await forward(request, "responses", admitted, body, browser_session=True)
+        if response.status_code >= 400:
+            raise RuntimeError("title generation unavailable")
+        async for _ in response.body_iterator:
+            pass
+        generated = await suggested_title_response(admitted.run_id)
+        title = generated.strip().strip('"“”').splitlines()[0][:60].strip() if generated else ""
+        if not title:
+            raise RuntimeError("title generation unavailable")
+    except Exception as exc:
+        await release_title_prompt(employee.employee_id, conversation_id)
+        raise HTTPException(502, "title generation unavailable") from exc
+    return {"title": await save_suggested_title(employee.employee_id, conversation_id, title)}
+
+
+@router.post("/runs/{run_id}/learn")
+async def learn_context(run_id: UUID, request: Request,
+                        employee: EmployeeInfo = Depends(current_employee)):
+    _check_origin(request)
+    _ready(employee, "collaborator")
+    try:
+        source = await claim_context_source(employee.employee_id, run_id)
+    except HistoryNotFound:
+        raise HTTPException(404, "run not found")
+    if source is None:
+        return {"updated": False}
+    prompt, credential_id, existing_profile, profile_version = source
+    instruction = (
+        "Atualize um perfil curto, em terceira pessoa, sobre o usuário. Preserve os fatos válidos "
+        "do perfil atual; mude apenas o que a nova mensagem do próprio usuário declarar ou corrigir "
+        "explicitamente. Inclua preferências de resposta, papel profissional e interesses duráveis. "
+        "Não infira personalidade, desempenho ou características sensíveis. Não use resposta do "
+        "assistente nem anexos. Não inclua nomes de clientes ou terceiros, senhas, tokens, chaves, "
+        "documentos, dados financeiros, CPF, CNPJ, endereços, telefones ou outros dados sensíveis. "
+        "Se a mensagem não trouxer nada durável sobre o usuário, devolva o perfil atual sem mudanças. "
+        "Use no máximo 2500 caracteres. Responda somente JSON: {\"profile\":\"texto atualizado\"}."
+    )
+    payload = {"model": "gpt-6-luna", "input": [
+        {"role": "system", "content": instruction},
+        {"role": "user", "content": json.dumps({"message": prompt[:3000],
+            "current_profile": existing_profile}, ensure_ascii=False)},
+    ], "stream": True, "store": False}
+    body = json.dumps(payload, ensure_ascii=False).encode()
+    try:
+        admitted = await admit_employee(employee.employee_id, credential_id,
+                                        RequestRecord("POST", "responses", body))
+        response = await forward(request, "responses", admitted, body, browser_session=True)
+        if response.status_code >= 400:
+            raise RuntimeError("memory extraction unavailable")
+        async for _ in response.body_iterator:
+            pass
+        generated = await suggested_title_response(admitted.run_id)
+        match = re.search(r"\{.*\}", generated or "", re.DOTALL)
+        parsed = json.loads(match.group() if match else "")
+        content = parsed.get("profile")
+        if not isinstance(content, str) or len(content) > 3000:
+            raise ValueError("invalid profile update")
+        content = content.strip()
+        if (re.search(r"\b(cpf|cnpj|senha|password|token|segredo|chave|api.?key|telefone|endereço)\b",
+                      content, re.IGNORECASE) or
+                re.search(r"\d|@|https?://", content, re.IGNORECASE)):
+            content = existing_profile
+        await save_generated_profile(employee.employee_id, run_id, content, profile_version)
+        return {"updated": content != existing_profile}
+    except QuotaExceeded as exc:
+        await release_context_source(employee.employee_id, run_id)
+        raise HTTPException(429, "rate limit exceeded" if exc.kind == "rate" else "daily quota exceeded")
+    except UnavailableAssignment:
+        await release_context_source(employee.employee_id, run_id)
+        raise HTTPException(403, "credential unavailable")
+    except ChatConflict as exc:
+        await release_context_source(employee.employee_id, run_id)
+        raise HTTPException(409, {"code": exc.code})
+    except Exception as exc:
+        await release_context_source(employee.employee_id, run_id)
+        raise HTTPException(502, "memory extraction unavailable") from exc
+
+
+@router.patch("/conversation")
+async def update_conversation_title(body: TitleBody, request: Request,
+                                    employee: EmployeeInfo = Depends(current_employee)):
+    _check_origin(request)
+    _ready(employee, "collaborator")
+    title = body.title.strip()
+    if not title:
+        raise HTTPException(422, "title is empty")
+    try:
+        return {"title": await rename_conversation(employee.employee_id, title)}
+    except HistoryNotFound:
+        raise HTTPException(404, "conversation not found")
 
 
 @router.get("/runs/{run_id}")
@@ -109,6 +588,89 @@ async def run_detail(run_id: UUID, employee: EmployeeInfo = Depends(current_empl
         return await employee_run(employee.employee_id, run_id)
     except HistoryNotFound:
         raise HTTPException(404, "run not found")
+
+
+@router.post("/runs/{run_id}/artifacts")
+async def create_artifact(run_id: UUID, body: ArtifactBody, request: Request,
+                          employee: EmployeeInfo = Depends(current_employee)):
+    _check_origin(request)
+    _ready(employee, "collaborator")
+    try:
+        prompt, answer, credential_id, existing = await artifact_source(
+            employee.employee_id, run_id, body.format)
+    except HistoryNotFound:
+        raise HTTPException(404, "run not found")
+    except ChatConflict:
+        raise HTTPException(409, "A resposta ainda não está disponível.")
+    if existing:
+        return existing
+    content = answer
+    if body.format in ("csv", "xlsx"):
+        payload = {"model": "gpt-6-luna", "input": [
+            {"role": "system", "content": (
+                "Crie uma tabela a partir do pedido e da resposta abaixo. Responda SOMENTE com JSON "
+                "no formato {\"columns\":[\"Coluna\"],\"rows\":[[\"valor\"]]}. "
+                "Não invente dados ausentes. Se não houver dados estruturados, organize os pontos da "
+                "resposta em colunas úteis. Limite a 50 colunas e 10000 linhas.")},
+            {"role": "user", "content": f"Pedido: {prompt}\n\nResposta: {answer}"},
+        ], "stream": True, "store": False}
+        upstream_body = json.dumps(payload, ensure_ascii=False).encode()
+        try:
+            admitted = await admit_employee(employee.employee_id, credential_id,
+                                            RequestRecord("POST", "responses", upstream_body))
+        except UnavailableAssignment:
+            raise HTTPException(403, "credential unavailable")
+        except QuotaExceeded as exc:
+            raise HTTPException(429, "rate limit exceeded" if exc.kind == "rate" else "daily quota exceeded")
+        try:
+            response = await forward(request, "responses", admitted, upstream_body, browser_session=True)
+            if response.status_code >= 400:
+                raise RuntimeError("artifact generation unavailable")
+            async for _ in response.body_iterator:
+                pass
+            content = await suggested_title_response(admitted.run_id)
+        except Exception as exc:
+            raise HTTPException(502, "Não foi possível gerar a planilha.") from exc
+    try:
+        data = build_artifact(body.format, content or "")
+        return await save_artifact(employee.employee_id, run_id, body.format, data)
+    except InvalidArtifact as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except HistoryNotFound:
+        raise HTTPException(404, "run not found")
+
+
+@router.get("/artifacts/{artifact_id}")
+async def download_artifact(artifact_id: UUID,
+                            employee: EmployeeInfo = Depends(current_employee)):
+    _ready(employee, "collaborator")
+    try:
+        name, mime, data = await employee_artifact(employee.employee_id, artifact_id)
+    except HistoryNotFound:
+        raise HTTPException(404, "artifact not found")
+    return Response(data, media_type=mime, headers={
+        "Content-Disposition": f"attachment; filename=download; filename*=UTF-8''{quote(name)}",
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff",
+    })
+
+
+@router.get("/artifacts/{artifact_id}/preview")
+async def preview_generated_artifact(artifact_id: UUID,
+                                     employee: EmployeeInfo = Depends(current_employee)):
+    _ready(employee, "collaborator")
+    try:
+        name, mime, data = await employee_artifact(employee.employee_id, artifact_id)
+    except HistoryNotFound:
+        raise HTTPException(404, "artifact not found")
+    if mime == "application/pdf":
+        return Response(data, media_type="application/pdf", headers={
+            "Content-Disposition": "inline",
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        })
+    return JSONResponse(preview_table("csv" if mime.startswith("text/csv") else "xlsx", data),
+                        headers={"Cache-Control": "private, no-store"})
 
 
 @governance_router.get("/runs")

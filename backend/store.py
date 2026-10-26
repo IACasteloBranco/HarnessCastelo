@@ -49,6 +49,7 @@ class ChatRun:
     conversation_id: UUID
     client_message_id: UUID
     text: str
+    attachments: list[dict] | None = None
 
 
 @dataclass(frozen=True)
@@ -197,6 +198,8 @@ async def _record_run(session, credential: CredentialRecord, request: RequestRec
     if chat:
         stored_payload = {"model": payload.get("model") if isinstance(payload, dict) else None,
                           "input": [{"role": "user", "content": chat.text}]}
+        if chat.attachments:
+            stored_payload["attachments"] = chat.attachments
         body_text = json.dumps(stored_payload, ensure_ascii=False)
     else:
         stored_payload = payload

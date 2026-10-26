@@ -39,7 +39,7 @@ Mantenha tokens criptografados. Faça a atribuição muitos-para-muitos em uma m
 
 Adicione uma API REST de chat que usa a sessão interna para identificar o colaborador. Crie a entidade de conversa desde o início, embora a primeira interface mostre uma conversa por colaborador. Associe cada execução a colaborador, conversa e credencial OAuth.
 
-Continue usando o encaminhamento e a captura SSE atuais. Grave o prompt e a resposta completos. Mantenha o histórico isolado por colaborador e permita que a governança consulte o conjunto autorizado. Anexos e conteúdo de arquivos ficam fora do chat inicial. Quando esse recurso entrar, grave só nome, tipo e referência técnica.
+Continue usando o encaminhamento e a captura SSE atuais. Grave o prompt e a resposta completos. Mantenha o histórico isolado por colaborador e permita que a governança consulte o conjunto autorizado. Anexos ficaram fora do chat inicial; na evolução do chat, a migração `0010_chat_attachment_downloads` passou a guardar conteúdo criptografado para download pelo dono da conversa, além de nome, tipo, tamanho e referência técnica.
 
 Se a renovação OAuth for necessária antes de enviar a mensagem ao upstream, preserve o texto e tente enviá-lo uma vez após reconectar. Não repita a mensagem se o upstream já a recebeu.
 
@@ -79,6 +79,6 @@ O proxy atual associa runs a credenciais OAuth, mas não registra qual colaborad
 
 - Interface web do chat e console de governança.
 - Redis e regras de cache.
-- Upload e armazenamento de conteúdo de arquivos.
+- Armazenamento genérico de arquivos fora das conversas; os anexos de chat com download foram acrescentados na migração `0010_chat_attachment_downloads`.
 - Disponibilidade, implantação, backups e recuperação de desastre.
 - Funcionalidades avançadas e agentes.

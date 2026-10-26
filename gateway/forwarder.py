@@ -32,6 +32,7 @@ async def forward(request: Request, path: str, admitted: AdmittedRun, body: byte
             media_type="application/json",
         )
 
+    payload = None
     if path.startswith("responses") and body:
         try:
             payload = json.loads(body)
@@ -42,10 +43,12 @@ async def forward(request: Request, path: str, admitted: AdmittedRun, body: byte
             pass
 
     headers = {
-        key: value for key, value in request.headers.items()
+        key.lower(): value for key, value in request.headers.items()
         if (key.lower() in ("accept", "content-type") if browser_session else
             key.lower() not in ("host", "authorization", "content-length"))
     }
+    if path.startswith("responses") and isinstance(payload, dict):
+        headers["content-type"] = "application/json"
     headers["Authorization"] = f"Bearer {token}"
 
     client = httpx.AsyncClient(
@@ -79,7 +82,10 @@ async def forward(request: Request, path: str, admitted: AdmittedRun, body: byte
         resp.status_code, time.time() - t0,
     )
 
-    is_event_stream = "text/event-stream" in resp.headers.get("content-type", "").lower()
+    is_event_stream = ("text/event-stream" in resp.headers.get("content-type", "").lower()
+                       or (path.startswith("responses") and resp.status_code < 400
+                           and isinstance(payload, dict) and payload.get("stream") is True
+                           and not resp.headers.get("content-type")))
 
     async def stream():
         decoder = EventStreamDecoder() if is_event_stream else None
@@ -145,13 +151,16 @@ async def forward(request: Request, path: str, admitted: AdmittedRun, body: byte
                     finally:
                         await client.aclose()
 
+    response_headers = {
+        key: value
+        for key, value in resp.headers.items()
+        if key.lower() not in ("content-length", "transfer-encoding", "content-encoding")
+        and (not browser_session or key.lower() not in ("set-cookie", "access-control-allow-origin", "access-control-allow-credentials"))
+    }
+    if is_event_stream:
+        response_headers["content-type"] = "text/event-stream"
     return StreamingResponse(
         stream(),
         status_code=resp.status_code,
-        headers={
-            key: value
-            for key, value in resp.headers.items()
-            if key.lower() not in ("content-length", "transfer-encoding", "content-encoding")
-            and (not browser_session or key.lower() not in ("set-cookie", "access-control-allow-origin", "access-control-allow-credentials"))
-        },
+        headers=response_headers,
     )

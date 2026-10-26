@@ -4,7 +4,11 @@ Proxy FastAPI para o backend Codex, com OAuth por conta, chaves de cliente, limi
 
 O código está separado em `backend/`, `gateway/` e `frontend/`. O mapa atual e os limites ainda pendentes estão em [`docs/PROJECT_CONTEXT.md`](docs/PROJECT_CONTEXT.md).
 
+Para retomar o MVP em outra máquina, leia o [estado atual e roteiro de continuidade](docs/HANDOFF.md). O frontend completo está em [`frontend/public/`](frontend/public/) e seu funcionamento está descrito no [README do frontend](frontend/README.md).
+
 ## Banco local no Windows
+
+Este roteiro de instalação está preparado, mas a aplicação completa ainda não foi executada e validada em Windows. O ajuste do loop assíncrono para PostgreSQL está em `gateway/serve.py` e `backend/database.py`; OAuth, navegador e transcrição local ainda precisam de um teste de ponta a ponta no sistema.
 
 Requer Python 3.11 ou superior e PostgreSQL 17. Para subir o PostgreSQL com Docker Compose:
 
@@ -15,13 +19,13 @@ notepad .env
 docker compose up -d db
 ```
 
-No `.env`, configure `POSTGRES_PASSWORD` e `DATABASE_URL` com a mesma senha. Gere uma chave Fernet uma vez:
+No `.env`, configure `POSTGRES_PASSWORD` e `DATABASE_URL` com a mesma senha. A porta local padrão deste projeto é `55434` para não conflitar com outros bancos PostgreSQL; se mudar `POSTGRES_PORT`, atualize também a porta em `DATABASE_URL`. Gere uma chave Fernet uma vez:
 
 ```powershell
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
-Copie o resultado para `TOKEN_ENCRYPTION_KEY` no `.env`. Guarde essa chave: sem ela os tokens OAuth salvos no banco não podem ser lidos. Não a regenere depois de importar as contas.
+Copie o resultado para `TOKEN_ENCRYPTION_KEY` no `.env`. Guarde essa chave: sem ela os tokens OAuth e os anexos criptografados salvos no banco não podem ser lidos. Não a regenere depois de importar as contas.
 
 Carregue as três variáveis do `.env` no PowerShell, aplique o esquema e importe o registro e os arquivos de autenticação atuais:
 
@@ -89,6 +93,14 @@ python -m backend.scripts.provision reset-password COLAB001
 python -m backend.scripts.provision disable COLAB001
 ```
 
+Para carregar a lista inicial de departamentos e colaboradores da planilha da Castelo Branco em um banco sem organizações, aplique as migrações e execute:
+
+```powershell
+python -m backend.scripts.import_directory "Códigos dos departamentos.xlsx"
+```
+
+O importador valida toda a planilha antes de escrever, cria a organização `CASTELO`, os departamentos e os colaboradores em uma transação e grava as senhas temporárias em `.tmp/senhas-colaboradores.csv`. Entregue cada senha por um canal interno e guarde esse arquivo fora de qualquer pasta pública. O banco guarda códigos e departamentos, sem os nomes da planilha. O importador recusa um banco que já tenha uma organização e não substitui contas existentes.
+
 O login interno fica em `POST /api/auth/login`, com JSON `{"employee_code":"COLAB001","password":"..."}`. `GET /api/auth/me` informa a conta e se a senha precisa ser trocada; `POST /api/auth/change-password` recebe `current_password` e `new_password`; `POST /api/auth/logout` encerra a sessão. As rotas que alteram estado exigem o cabeçalho `Origin` correspondente à origem do serviço. A sessão usa cookie opaco `HttpOnly`, `Secure` e `SameSite=Lax`, dura até oito horas e pode ser revogada no banco. Cinco tentativas de senha inválida bloqueiam a conta por 15 minutos; o operador também pode recuperar o acesso com `reset-password`. A senha nova precisa ter pelo menos 12 caracteres. O navegador precisa acessar o serviço por HTTPS para usar o cookie seguro; a configuração HTTPS entra na etapa de infraestrutura.
 
 ## OAuth compartilhado
@@ -106,7 +118,7 @@ O comando `connector` também designa o responsável por uma credencial OAuth j�
 
 O cliente pode usar `GET /api/oauth/credentials` para apresentar as credenciais atribuídas. A rota de baixo nível `POST /api/credentials/CONTA01/v1/responses` continua disponível com cookie interno e `Origin` da aplicação; o chat da fase 3 usa a API descrita abaixo. As rotas antigas `/v1/*` e suas chaves continuam disponíveis, com runs sem colaborador interno.
 
-## Chat e histórico da fase 3
+## Chat e histórico
 
 Depois de `python -m alembic upgrade head`, o colaborador com senha definitiva e credencial OAuth atribuída envia uma mensagem por `POST /api/chat/messages`. A requisição usa o cookie interno e o `Origin` da aplicação:
 
@@ -114,16 +126,31 @@ Depois de `python -m alembic upgrade head`, o colaborador com senha definitiva e
 {
   "client_message_id": "e557feef-058e-45d5-9579-8251a2cc9fb9",
   "credential_id": "CONTA01",
-  "model": "gpt-6-sol",
-  "text": "Olá"
+  "model": "gpt-6-luna",
+  "text": "Olá",
+  "new_conversation": true
 }
 ```
 
-A resposta repassa os eventos SSE do Codex e inclui `X-Conversation-ID` e `X-Run-ID`. O backend mantém uma conversa por colaborador nesta fase. Para cada envio, ele reconstrói o contexto a partir das respostas completas da própria conversa e grava o prompt, a resposta e os eventos no PostgreSQL. Mensagens de colaboradores que compartilham uma credencial permanecem em conversas distintas. O identificador `client_message_id` pertence a uma mensagem: repeti-lo depois de uma admissão retorna `409 duplicate_message` sem novo envio ao upstream.
+A resposta repassa os eventos SSE do Codex e inclui `X-Conversation-ID` e `X-Run-ID`. `new_conversation: true` cria uma conversa no primeiro envio; as mensagens seguintes informam `conversation_id`. Para cada envio, o backend reconstrói o contexto a partir das respostas completas daquela conversa e grava o prompt, a resposta e os eventos no PostgreSQL. Mensagens de colaboradores que compartilham uma credencial permanecem em conversas distintas. O identificador `client_message_id` pertence a uma mensagem: repeti-lo depois de uma admissão retorna `409 duplicate_message` sem novo envio ao upstream.
 
-Se o token exigir reconexão antes da admissão, a API retorna `409` com `code: reconnect_required` e o mesmo `client_message_id`. O navegador deve manter o texto, concluir o fluxo em `/api/oauth` e reenviar a mensagem uma vez com o mesmo UUID. Depois que um run é admitido, o backend nunca o reenvia automaticamente, inclusive se a conexão com o upstream falhar e a entrega ficar incerta. O frontend ainda não está implementado; esse comportamento descreve o contrato que ele deve seguir.
+Se o token exigir reconexão antes da admissão, a API retorna `409` com `code: reconnect_required` e o mesmo `client_message_id`. O navegador mantém o texto, conclui o fluxo em `/api/oauth` e reenvia a mensagem uma vez com o mesmo UUID. Depois que um run é admitido, o backend nunca o reenvia automaticamente, inclusive se a conexão com o upstream falhar e a entrega ficar incerta. A interface também não repete automaticamente uma entrega incerta.
 
-`GET /api/chat/history?limit=50&before=RUN_ID` pagina o histórico da própria conta. `GET /api/chat/runs/RUN_ID` traz o prompt, a resposta completa disponível e os eventos capturados. O responsável pela governança usa `GET /api/governance/runs` para listar metadados e `GET /api/governance/runs/RUN_ID` para ler um run completo; cada leitura completa grava uma entrada em `governance_access` antes de responder. Runs antigos sem colaborador continuam fora do histórico individual e disponíveis à governança. O chat inicial aceita texto; anexos e múltiplas conversas na interface ficam para uma etapa posterior.
+`GET /api/chat/conversations?q=...` lista e busca as conversas da própria conta por título ou conteúdo, com trecho e `match_run_id` para salto. `GET /api/chat/history?conversation_id=ID&limit=50&before=RUN_ID` pagina suas mensagens. `PATCH /api/chat/conversations/ID` altera o título. `POST /api/chat/conversations/ID/suggest-title` faz uma chamada curta adicional à IA após a primeira resposta completa; ela conta na cota e é registrada na auditoria. `DELETE /api/chat/conversations/ID` oculta a conversa do colaborador e da busca, preservando os runs para a governança até a retenção de 90 dias. A rota antiga `PATCH /api/chat/conversation` continua disponível para clientes existentes. `GET /api/chat/runs/RUN_ID` traz o prompt, a resposta completa disponível e os eventos capturados. O responsável pela governança usa `GET /api/governance/runs` para listar metadados e `GET /api/governance/runs/RUN_ID` para ler um run completo; cada leitura completa grava uma entrada em `governance_access` antes de responder. Runs antigos sem colaborador continuam fora do histórico individual e disponíveis à governança. O chat aceita anexos de até 50 MB por mensagem. Depois da migração `0010_chat_attachment_downloads`, o PostgreSQL guarda seu conteúdo criptografado, associado ao run. O colaborador dono da conversa baixa o original por `GET /api/chat/attachments/ID`; a rota retorna 404 para outras contas e para conversas excluídas. Os arquivos saem com os runs na retenção de 90 dias. Anexos anteriores à migração permanecem apenas como metadados, sem download possível.
+
+Após a migração `0012_chat_projects`, `GET/POST /api/chat/projects` lista e cria projetos do colaborador; `PATCH/DELETE /api/chat/projects/ID` renomeia ou exclui. `PATCH /api/chat/conversations/ID/project` recebe `{"project_id":"UUID"}` ou `null` para mover o chat. `GET /api/chat/conversations` aceita `project_id=UUID` ou `unassigned=true`; a interface faz a busca global `q` sem esses filtros. Para iniciar uma conversa no projeto, `POST /api/chat/messages` recebe `project_id` junto de `new_conversation=true`. Excluir um projeto move seus chats para a lista sem projeto, preservando o histórico e a auditoria. Notas de contexto do projeto entram nas mensagens seguintes dos chats vinculados a ele.
+
+As migrações `0013_chat_context` a `0015_seed_user_profile` acrescentam notas privadas por perfil, projeto e conversa, além de um perfil em texto único por colaborador. `GET/PATCH /api/chat/profile` consulta ou edita esse texto. `GET/POST /api/chat/context` e `PATCH/DELETE /api/chat/context/ID` gerenciam as notas. O chat inclui o perfil e as notas aplicáveis no prompt. Após uma resposta concluída, o frontend chama `POST /api/chat/runs/RUN_ID/learn` para revisar o perfil com outra chamada à IA. Edições manuais do perfil prevalecem sobre revisões automáticas iniciadas antes delas. As memórias automáticas pessoais criadas no formato anterior foram copiadas para o texto inicial sem apagar as notas originais.
+
+Após uma resposta completa, `POST /api/chat/runs/RUN_ID/artifacts` com `{"format":"pdf"}` cria um PDF do texto da IA. `csv` e `xlsx` fazem uma chamada adicional à IA para organizar o pedido e a resposta em uma tabela JSON; essa chamada consome cota e gera um run auditável. A rota retorna o identificador do arquivo, que aparece também em `GET /api/chat/history` e pode ser baixado por `GET /api/chat/artifacts/ID`. A migração `0011_chat_artifacts` guarda o conteúdo criptografado e vinculado ao run original. Repetir a criação do mesmo formato retorna o arquivo existente. O download exige a conta dona da conversa e deixa de funcionar após exclusão da conversa ou retenção de 90 dias. Cada arquivo tem limite de 20 MB.
+
+O prompt do chat informa à IA que o Maximus gera arquivos. Quando o usuário pede explicitamente conteúdo em PDF, o frontend chama a rota de criação após a resposta completa e exibe o cartão do arquivo. Perguntas apenas sobre a capacidade recebem orientação para usar **Criar arquivo**, sem produzir um PDF vazio. Respostas antigas não são reescritas; um PDF pode ser criado pelo menu sob uma resposta já existente.
+
+`GET /api/chat/artifacts/ID/preview` usa a mesma autorização. Para PDF, devolve o arquivo com disposição `inline`; para CSV e XLSX, devolve JSON com cabeçalhos e até 100 linhas, além do indicador `truncated`. A interface mostra essa prévia em uma janela e mantém o download integral disponível.
+
+`GET /api/chat/attachments/ID/preview` aplica a autorização do download. Devolve PDF e imagens para exibição no navegador, tabelas CSV/TSV/XLSX como JSON e texto/código como JSON limitado a 200 KB. Formatos sem prévia retornam 415; o arquivo original continua disponível para download.
+
+Uma conta `collaborator` pode receber `employees.can_govern = true` por uma operação administrativa no banco e acessar a governança sem perder o chat. A permissão é conferida em cada requisição; a interface mostra Governança na barra lateral e no menu de perfil dessa conta. Contas sem a permissão continuam recebendo `403` nas rotas de governança.
 
 ## Análise e alertas da fase 4
 
@@ -145,7 +172,7 @@ O backend exige `input` como lista e `stream: true`:
 
 ```json
 {
-  "model": "gpt-6-sol",
+  "model": "gpt-6-luna",
   "input": [{"role": "user", "content": "ping"}],
   "store": false,
   "stream": true

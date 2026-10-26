@@ -38,7 +38,9 @@ O gateway e o backend ainda compartilham o mesmo processo e a mesma base Postgre
 - O provisionamento é feito por comandos locais do operador; o primeiro frontend não inclui administração de contas.
 - O sistema registra prompts e respostas por 90 dias. Gestores recebem métricas agregadas após esse prazo.
 - Evidências de achados que possam repetir trechos do prompt são apagadas junto com o conteúdo bruto aos 90 dias; somente métricas agregadas sem identificação são mantidas por 12 meses.
-- Para arquivos enviados, o sistema registra nome, tipo e referência técnica. Não armazena o conteúdo do arquivo.
+- Para anexos enviados no chat, o sistema registra nome, tipo, tamanho e referência técnica. Desde a migração `0010_chat_attachment_downloads`, guarda também o conteúdo criptografado em tabela privada para download pelo colaborador dono da conversa. Anexos antigos continuam sem conteúdo recuperável. A retenção apaga os arquivos com os runs após 90 dias.
+- Para arquivos criados a partir das respostas da IA, o sistema guarda PDF, XLSX ou CSV criptografado e vinculado ao run original. Somente o colaborador dono da conversa baixa o arquivo; a retenção de 90 dias o remove junto ao run. XLSX e CSV usam uma chamada adicional à IA e consomem cota.
+- Projetos são privados por colaborador e agrupam conversas por `project_id`. Mover um chat altera o agrupamento e as notas de projeto aplicáveis às próximas mensagens; excluir o projeto devolve seus chats à lista geral e exclui suas notas de contexto. O perfil em texto único do colaborador e as notas do perfil, do projeto e da conversa são privados e modificam o prompt enviado à IA.
 - O colaborador pode consultar o próprio histórico. Somente uma conta do responsável pela governança pode consultar interações de todos; gestores recebem métricas agregadas.
 - Backend e gateway ficam em módulos separados no mesmo deploy.
 - O código do colaborador identifica a conta; o login usa uma senha própria.

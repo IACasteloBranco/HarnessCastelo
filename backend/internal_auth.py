@@ -24,6 +24,7 @@ class EmployeeInfo:
     department_code: str | None
     role: str
     must_change_password: bool
+    can_govern: bool
 
 
 def _code(value: str, limit: int) -> str:
@@ -193,7 +194,7 @@ async def resolve_session(token: str | None) -> EmployeeInfo | None:
         employee, organization_code, department_code = row
         return EmployeeInfo(
             employee.id, employee.code, organization_code, department_code,
-            employee.role, employee.must_change_password,
+            employee.role, employee.must_change_password, employee.can_govern,
         )
 
 

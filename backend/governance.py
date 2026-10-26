@@ -87,7 +87,7 @@ async def queue_findings(session, run_id: UUID, text: str, now: datetime) -> Non
 
 async def _governance_actor(session, actor_id: UUID) -> Employee:
     actor = await session.get(Employee, actor_id)
-    if actor is None or actor.disabled or actor.must_change_password or actor.role != "governance":
+    if actor is None or actor.disabled or actor.must_change_password or not (actor.role == "governance" or actor.can_govern):
         raise PermissionError
     return actor
 

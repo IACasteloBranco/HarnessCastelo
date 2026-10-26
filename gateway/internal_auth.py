@@ -54,6 +54,7 @@ async def me_route(employee: EmployeeInfo = Depends(current_employee)):
         "organization_code": employee.organization_code,
         "department_code": employee.department_code,
         "role": employee.role,
+        "can_govern": employee.can_govern or employee.role == "governance",
         "must_change_password": employee.must_change_password,
     }
 

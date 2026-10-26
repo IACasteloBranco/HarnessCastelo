@@ -1,6 +1,8 @@
 import logging
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
 from backend.database import session_factory
@@ -67,3 +69,6 @@ async def health():
     except Exception:
         raise HTTPException(503, "database unavailable")
     return {"ok": True}
+
+
+app.mount("/", StaticFiles(directory=Path(__file__).resolve().parent.parent / "frontend" / "public", html=True), name="frontend")

@@ -68,6 +68,28 @@ class ProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(seen, [b"[]"])
         finish.assert_called_once()
 
+    async def test_stream_without_upstream_content_type_is_forwarded_and_captured(self):
+        frame = b'event: response.completed\ndata: {"response": {"output": []}}\n\n'
+
+        with patch("gateway.forwarder.get_valid_token", return_value="oauth"), patch(
+            "gateway.forwarder.httpx.AsyncClient",
+            side_effect=lambda **kwargs: AsyncClient(transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, content=frame)
+            )),
+        ), patch("gateway.forwarder.append_events") as capture, patch(
+            "gateway.forwarder.finish_transport"
+        ) as finish:
+            request = Request({"type": "http", "method": "POST", "path": "/api/chat/messages",
+                               "query_string": b"", "headers": []})
+            response = await forward(request, "responses", AdmittedRun(
+                uuid4(), Credential("c", "u", "personal_oauth", 60, 500)),
+                b'{"stream": true}', browser_session=True)
+            self.assertEqual(response.headers["content-type"], "text/event-stream")
+            self.assertEqual(b"".join([part async for part in response.body_iterator]), frame)
+
+        self.assertEqual(capture.call_args.args[1][0].event_type, "response.completed")
+        self.assertEqual(finish.call_args.args[2], "incomplete")
+
     async def test_query_string_reaches_upstream(self):
         seen = []
 

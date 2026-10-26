@@ -93,6 +93,7 @@ class Run(Base):
     http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
     outcome: Mapped[str] = mapped_column(String(16), default="open", nullable=False)
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    context_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class RunEvent(Base):
@@ -102,6 +103,31 @@ class RunEvent(Base):
     ordinal: Mapped[int] = mapped_column(Integer, primary_key=True)
     event_type: Mapped[str] = mapped_column(String(128), nullable=False)
     data: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class ChatAttachment(Base):
+    __tablename__ = "chat_attachments"
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    run_id: Mapped[UUID] = mapped_column(ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(255), nullable=False)
+    size: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+
+
+class ChatArtifact(Base):
+    __tablename__ = "chat_artifacts"
+    __table_args__ = (UniqueConstraint("run_id", "format"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    run_id: Mapped[UUID] = mapped_column(ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    format: Mapped[str] = mapped_column(String(8), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(255), nullable=False)
+    size: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
 
 
 class Organization(Base):
@@ -143,20 +169,63 @@ class Employee(Base):
     department_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     code: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
     role: Mapped[str] = mapped_column(String(20), nullable=False)
+    can_govern: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     must_change_password: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     disabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     failed_logins: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    profile_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    profile_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    profile_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Conversation(Base):
     __tablename__ = "conversations"
+    __table_args__ = (
+        UniqueConstraint("id", "employee_id"),
+        ForeignKeyConstraint(["project_id", "employee_id"], ["projects.id", "projects.employee_id"],
+                             name="fk_conversations_project_employee"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    employee_id: Mapped[UUID] = mapped_column(ForeignKey("employees.id"), nullable=False, index=True)
+    project_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True, index=True)
+    title: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_activity_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    title_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class Project(Base):
+    __tablename__ = "projects"
     __table_args__ = (UniqueConstraint("id", "employee_id"),)
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
-    employee_id: Mapped[UUID] = mapped_column(ForeignKey("employees.id"), unique=True, nullable=False)
+    employee_id: Mapped[UUID] = mapped_column(ForeignKey("employees.id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(80), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ContextNote(Base):
+    __tablename__ = "context_notes"
+    __table_args__ = (
+        ForeignKeyConstraint(["project_id", "employee_id"], ["projects.id", "projects.employee_id"]),
+        ForeignKeyConstraint(["conversation_id", "employee_id"], ["conversations.id", "conversations.employee_id"]),
+        CheckConstraint("project_id IS NULL OR conversation_id IS NULL", name="ck_context_notes_one_scope"),
+        CheckConstraint("kind IN ('instruction', 'memory')", name="ck_context_notes_kind"),
+        UniqueConstraint("source_run_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    employee_id: Mapped[UUID] = mapped_column(ForeignKey("employees.id"), nullable=False, index=True)
+    project_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True, index=True)
+    conversation_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True, index=True)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    content: Mapped[str] = mapped_column(String(1000), nullable=False)
+    source_run_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
