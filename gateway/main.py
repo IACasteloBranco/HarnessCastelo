@@ -1,3 +1,5 @@
+import asyncio
+from contextlib import asynccontextmanager
 import logging
 from pathlib import Path
 
@@ -13,13 +15,35 @@ from gateway.forwarder import forward
 from gateway.internal_auth import _check_origin, current_employee, router as internal_auth_router
 from gateway.oauth_connection import router as oauth_router
 from gateway.chat import router as chat_router, governance_router
+from gateway.profile_learning import process_pending_profiles
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    async def profile_worker() -> None:
+        while True:
+            try:
+                await process_pending_profiles()
+            except Exception:
+                logging.getLogger("profile_learning").exception("profile learning poll failed")
+            await asyncio.sleep(15)
+
+    task = asyncio.create_task(profile_worker(), name="profile-learning")
+    try:
+        yield
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+app = FastAPI(lifespan=lifespan)
 app.include_router(internal_auth_router)
 app.include_router(oauth_router)
 app.include_router(chat_router)

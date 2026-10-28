@@ -2,10 +2,12 @@
 
 from playwright.sync_api import sync_playwright
 from uuid import uuid4
+from pathlib import Path
+from tempfile import gettempdir
 
 
 with sync_playwright() as playwright:
-    browser = playwright.chromium.launch(headless=True, executable_path="/opt/google/chrome/chrome", args=["--no-sandbox"])
+    browser = playwright.chromium.launch(headless=True)
     page = browser.new_page(viewport={"width": 1280, "height": 900})
     errors = []
     page.on("pageerror", lambda error: errors.append(str(error)))
@@ -67,12 +69,12 @@ with sync_playwright() as playwright:
     page.locator("#project-name").fill(project_name)
     page.locator("#project-form button[type=submit]").click()
     page.get_by_text(f"Novo chat · {project_name}").wait_for()
-    page.screenshot(path="/tmp/maximus-projects-desktop.png")
+    page.screenshot(path=str(Path(gettempdir()) / "maximus-projects-desktop.png"))
     page.set_viewport_size({"width": 390, "height": 844})
     page.locator("#chat-mobile-list").click()
     page.locator("#chat-project-list .chat-project-open", has_text=project_name).wait_for()
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
-    page.screenshot(path="/tmp/maximus-projects-mobile.png")
+    page.screenshot(path=str(Path(gettempdir()) / "maximus-projects-mobile.png"))
     page.get_by_role("button", name="Fechar conversas").click()
     page.set_viewport_size({"width": 1280, "height": 900})
     page.locator("#chat-text").fill("Mensagem do projeto")

@@ -2,13 +2,14 @@ import asyncio
 import os
 import sys
 from functools import lru_cache
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from uuid import UUID
 
 from sqlalchemy import BigInteger, Boolean, CheckConstraint, Date, DateTime, ForeignKey, ForeignKeyConstraint, Index, Integer, LargeBinary, String, Text, UniqueConstraint, Uuid, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from pgvector.sqlalchemy import Vector
 
 
 # Psycopg async connections do not support Windows' default ProactorEventLoop.
@@ -94,6 +95,8 @@ class Run(Base):
     outcome: Mapped[str] = mapped_column(String(16), default="open", nullable=False)
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     context_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    context_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    context_learning_status: Mapped[str] = mapped_column(String(16), nullable=False, default="done")
 
 
 class RunEvent(Base):
@@ -150,6 +153,42 @@ class Department(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class DepartmentDocument(Base):
+    __tablename__ = "department_documents"
+    __table_args__ = (
+        ForeignKeyConstraint(["organization_id", "department_id"],
+                             ["departments.organization_id", "departments.id"],
+                             ondelete="CASCADE"),
+        UniqueConstraint("organization_id", "department_id", "sha256",
+                         name="uq_department_documents_content"),
+        Index("ix_department_documents_scope", "organization_id", "department_id", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    organization_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    department_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    size: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    created_by: Mapped[UUID] = mapped_column(ForeignKey("employees.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class DepartmentDocumentChunk(Base):
+    __tablename__ = "department_document_chunks"
+    __table_args__ = (UniqueConstraint("document_id", "ordinal"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    document_id: Mapped[UUID] = mapped_column(
+        ForeignKey("department_documents.id", ondelete="CASCADE"), nullable=False, index=True)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    page_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    text_ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    embedding: Mapped[list[float]] = mapped_column(Vector(384), nullable=False)
+
+
 class Employee(Base):
     __tablename__ = "employees"
     __table_args__ = (
@@ -179,6 +218,8 @@ class Employee(Base):
     profile_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
     profile_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     profile_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    profile_source: Mapped[str] = mapped_column(String(16), nullable=False, default="manual")
+    profile_source_run_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
 
 
 class Conversation(Base):
@@ -227,6 +268,8 @@ class ContextNote(Base):
     content: Mapped[str] = mapped_column(String(1000), nullable=False)
     source_run_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
 
 class GovernanceAccess(Base):

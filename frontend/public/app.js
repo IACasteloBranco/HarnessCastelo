@@ -14,6 +14,16 @@ let audioStream = null;
 let recordingTimer = null;
 let profileDirty = false;
 
+function confirmAction(title, message) {
+  const dialog = $("confirm-dialog");
+  $("confirm-dialog-title").textContent = title;
+  $("confirm-dialog-message").textContent = message;
+  return new Promise(resolve => {
+    dialog.addEventListener("close", () => resolve(dialog.returnValue === "confirm"), { once: true });
+    dialog.showModal();
+  });
+}
+
 function setChatUserMenu(open) {
   $("chat-user-menu").hidden = !open;
   $("chat-side-user").setAttribute("aria-expanded", String(open));
@@ -28,12 +38,21 @@ function show(screen, focus = true) {
   document.querySelector(".shell").classList.toggle("login-shell", screen === "login");
   document.querySelector(".shell").classList.toggle("workspace-shell", screen === "chat" || screen === "governance");
   document.querySelector(".shell").classList.toggle("chat-shell", screen === "chat");
+  document.querySelector(".shell").classList.toggle("governance-shell", screen === "governance");
   for (const [name, view] of Object.entries(views)) view.hidden = name !== screen;
   $("workspace-nav").hidden = !state.employee || state.employee.must_change_password || screen === "login" || screen === "password";
   $("chat-nav").hidden = state.employee?.role !== "collaborator";
   $("accounts-nav").hidden = state.employee?.role !== "collaborator";
   $("governance-nav").hidden = !(state.employee?.role === "governance" || state.employee?.can_govern);
-  $("chat-sidebar-governance").hidden = !state.employee?.can_govern;
+  $("chat-sidebar-chat").hidden = state.employee?.role !== "collaborator";
+  $("chat-sidebar-accounts").hidden = screen !== "governance" || state.employee?.role !== "collaborator";
+  $("chat-sidebar-governance").hidden = !(state.employee?.role === "governance" || state.employee?.can_govern);
+  $("chat-sidebar-chat").classList.toggle("chat-side-current", screen === "chat");
+  $("chat-sidebar-chat").setAttribute("aria-current", screen === "chat" ? "page" : "false");
+  $("chat-sidebar-accounts").classList.toggle("chat-side-current", screen === "home");
+  $("chat-sidebar-accounts").setAttribute("aria-current", screen === "home" ? "page" : "false");
+  $("chat-sidebar-governance").classList.toggle("chat-side-current", screen === "governance");
+  $("chat-sidebar-governance").setAttribute("aria-current", screen === "governance" ? "page" : "false");
   $("chat-menu-governance").hidden = !state.employee?.can_govern;
   for (const [name, id] of [["chat", "chat-nav"], ["home", "accounts-nav"], ["governance", "governance-nav"]]) $(id).setAttribute("aria-current", screen === name ? "page" : "false");
   $("session-actions").hidden = !state.employee;
@@ -256,7 +275,9 @@ $("logout-button").addEventListener("click", async () => {
 
 $("refresh-button").addEventListener("click", loadCredentials);
 $("chat-nav").addEventListener("click", async () => { show("chat"); await loadProjects(); await loadChat(); await loadConversations(); });
+$("chat-sidebar-chat").addEventListener("click", async () => { show("chat"); await loadProjects(); await loadChat(); await loadConversations(); });
 $("accounts-nav").addEventListener("click", () => { show("home"); loadCredentials(); });
+$("chat-sidebar-accounts").addEventListener("click", () => { show("home"); loadCredentials(); });
 $("chat-header-accounts").addEventListener("click", () => $("accounts-nav").click());
 $("chat-header-logout").addEventListener("click", () => $("logout-button").click());
 $("chat-side-user").addEventListener("click", () => setChatUserMenu($("chat-user-menu").hidden));
@@ -318,7 +339,7 @@ function renderProjects() {
     remove.innerHTML = '<svg class="ui-icon" aria-hidden="true"><use href="#icon-trash"/></svg><span>Excluir projeto</span>';
     remove.addEventListener("click", async () => {
       menu.hidePopover();
-      if (!window.confirm(`Excluir o projeto “${project.name}”? As conversas voltarão para “Sem projeto”.`)) return;
+      if (!await confirmAction("Excluir projeto?", `O projeto “${project.name}” e suas conversas serão mantidas em “Sem projeto”.`)) return;
       try {
         await api(`/api/chat/projects/${project.id}`, { method: "DELETE" });
         if (state.chat.projectId === project.id) state.chat.projectId = null;
@@ -414,6 +435,34 @@ function openContextDialog(scope = "profile") {
   loadContextNotes();
 }
 
+function profileProvenance(profile) {
+  const source = profile.updated_at
+    ? `${profile.source === "automatic" ? "Atualizado automaticamente a partir de uma conversa" : profile.source === "legacy" ? "Origem não registrada antes desta versão" : "Editado por você"} · ${new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" }).format(new Date(profile.updated_at))}`
+    : "Este perfil ainda não tem informações salvas.";
+  const status = {
+    pending: "Atualização automática pendente",
+    processing: "Atualizando o perfil automaticamente",
+    failed: "A atualização automática falhou após novas tentativas",
+  }[profile.learning_status];
+  return status ? `${source} · ${status}` : source;
+}
+
+function profileOrigin(profile) {
+  const link = $("profile-origin");
+  link.hidden = !profile.source_conversation_id;
+  if (!profile.source_conversation_id) return;
+  link.textContent = `Abrir conversa de origem${profile.source_title ? `: ${profile.source_title}` : ""}`;
+  link.onclick = async event => {
+    event.preventDefault();
+    state.chat.conversationId = profile.source_conversation_id;
+    state.chat.projectId = null;
+    $("context-dialog").close();
+    show("chat");
+    await loadChat();
+    await loadConversations();
+  };
+}
+
 async function loadContextNotes() {
   const scope = $("context-scope").value;
   const target = contextTarget(scope);
@@ -429,7 +478,12 @@ async function loadContextNotes() {
       scope === "profile" ? api("/api/chat/profile") : Promise.resolve(null),
     ]);
     if (!$("context-dialog").open || scope !== $("context-scope").value) return;
-    if (profile && !profileDirty) $("profile-text").value = profile.text;
+    if (profile) {
+      if (!profileDirty) $("profile-text").value = profile.text;
+      $("profile-provenance").textContent = profileProvenance(profile);
+      profileOrigin(profile);
+      $("profile-warning").hidden = !profile.quarantined;
+    }
     const { notes } = result;
     list.replaceChildren();
     if (!notes.length) {
@@ -441,7 +495,9 @@ async function loadContextNotes() {
       const row = document.createElement("div");
       row.className = "context-note";
       const label = document.createElement("small");
-      label.textContent = `${note.kind === "instruction" ? "Instrução" : "Memória"}${note.automatic ? " · criada pela IA" : ""}`;
+      const noteDate = note.updated_at || note.created_at;
+      const noteDateLabel = noteDate ? new Intl.DateTimeFormat("pt-BR", { dateStyle: "short" }).format(new Date(noteDate)) : "";
+      label.textContent = `${note.kind === "instruction" ? "Instrução" : "Memória"}${note.automatic ? " · criada pela IA" : ""}${noteDateLabel ? ` · ${note.updated_at && note.updated_at !== note.created_at ? "editada" : "salva"} em ${noteDateLabel}` : ""}${note.quarantined ? " · não usada: revise este conteúdo" : ""}`;
       const content = document.createElement("p");
       content.textContent = note.content;
       const actions = document.createElement("div");
@@ -462,7 +518,7 @@ async function loadContextNotes() {
       remove.type = "button";
       remove.textContent = "Excluir";
       remove.addEventListener("click", async () => {
-        if (!window.confirm("Excluir esta nota de contexto?")) return;
+        if (!await confirmAction("Excluir nota?", "A nota será removida do seu contexto.")) return;
         try {
           await api(`/api/chat/context/${note.id}`, { method: "DELETE" });
           resetContextForm();
@@ -491,6 +547,9 @@ $("profile-form").addEventListener("submit", async event => {
     });
     $("profile-text").value = profile.text;
     profileDirty = false;
+    $("profile-provenance").textContent = profileProvenance(profile);
+    profileOrigin(profile);
+    $("profile-warning").hidden = !profile.quarantined;
     formError("profile-error", "");
   } catch (error) { formError("profile-error", error.message); }
   finally { button.disabled = false; }
@@ -655,15 +714,6 @@ function assistantText(response) {
     .filter(text => typeof text === "string").join("\n");
 }
 
-function requestsPdf(text) {
-  const normalized = text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-  if (/\bnao (quero|gere|gerar|crie|criar)\b|\bsem pdf\b/.test(normalized)) return false;
-  const hasContent = /\b(resumo|relatorio|documento|texto|conteudo|dados|tabela|lista|carta|guia|artigo|historia|livro|resposta)\b/.test(normalized);
-  return /\bpdf\b/.test(normalized)
-    && /\b(crie|criar|gere|gerar|faca|fazer|monte|produza|exporte|transforme|converta|quero|preciso|entregue|envie)\b/.test(normalized)
-    && (hasContent || !/\b(consegue|pode|possivel)\b|tem como/.test(normalized));
-}
-
 function fileCard(file, onRemove) {
   const extension = file.name.split(".").at(-1).toLowerCase();
   const kind = ["png", "jpg", "jpeg", "webp", "gif"].includes(extension) ? "image"
@@ -725,33 +775,44 @@ async function openFilePreview(file) {
   const path = `/api/chat/${file.format ? "artifacts" : "attachments"}/${encodeURIComponent(file.id)}`;
   const key = `${file.format || "attachment"}:${file.id}`;
   const extension = file.name.split(".").at(-1).toLowerCase();
+  const images = ["png", "jpg", "jpeg", "webp", "gif"];
+  const label = extension === "pdf" ? "PDF" : extension === "xlsx" ? "Excel"
+    : extension === "csv" || extension === "tsv" ? extension.toUpperCase()
+      : images.includes(extension) ? "Imagem" : extension ? extension.toUpperCase() : "Arquivo";
   dialog.dataset.fileKey = key;
+  $("artifact-dialog-format").textContent = label;
   $("artifact-dialog-title").textContent = file.name;
   $("artifact-dialog-download").href = path;
   $("artifact-dialog-download").download = file.name;
   $("artifact-dialog-note").textContent = "";
-  body.replaceChildren();
+  const page = document.createElement("div");
+  page.className = "artifact-preview-page";
+  body.replaceChildren(page);
   if (!dialog.open) dialog.showModal();
   if (extension === "pdf") {
     const frame = document.createElement("iframe");
     frame.title = `Prévia de ${file.name}`;
     frame.src = `${path}/preview`;
-    body.append(frame);
+    page.classList.add("artifact-preview-pdf");
+    page.append(frame);
     $("artifact-dialog-note").textContent = "Documento PDF";
     return;
   }
-  if (["png", "jpg", "jpeg", "webp", "gif"].includes(extension)) {
+  if (images.includes(extension)) {
     const picture = document.createElement("img");
     picture.alt = `Prévia de ${file.name}`;
     picture.src = `${path}/preview`;
-    body.append(picture);
+    page.classList.add("artifact-preview-image");
+    page.append(picture);
     return;
   }
   if (!["csv", "tsv", "xlsx", "txt", "md", "json", "xml", "html", "py", "js", "ts", "css", "sql", "yaml", "yml"].includes(extension)) {
-    body.textContent = "A prévia não está disponível para este formato. Você pode baixar o arquivo original.";
+    page.classList.add("artifact-preview-empty");
+    page.textContent = "A prévia não está disponível para este formato. Você pode baixar o arquivo original.";
     return;
   }
-  body.textContent = "Carregando prévia…";
+  page.classList.add("artifact-preview-loading");
+  page.textContent = "Carregando prévia…";
   try {
     const preview = await api(`${path}/preview`);
     if (!dialog.open || dialog.dataset.fileKey !== key) return;
@@ -759,7 +820,8 @@ async function openFilePreview(file) {
       const content = document.createElement("pre");
       content.className = "chat-file-text-preview";
       content.textContent = preview.text;
-      body.replaceChildren(content);
+      page.classList.add("artifact-preview-text");
+      page.replaceChildren(content);
       $("artifact-dialog-note").textContent = preview.truncated ? "Exibindo os primeiros 200 KB. Baixe o arquivo para ver todo o conteúdo." : "Arquivo de texto";
       return;
     }
@@ -783,12 +845,16 @@ async function openFilePreview(file) {
       tbody.append(line);
     }
     table.append(thead, tbody);
-    body.replaceChildren(table);
+    page.classList.add("artifact-preview-table");
+    page.replaceChildren(table);
     $("artifact-dialog-note").textContent = preview.truncated
       ? "Exibindo as primeiras 100 linhas. Baixe o arquivo para ver todas."
       : `${preview.rows.length} ${preview.rows.length === 1 ? "linha" : "linhas"}`;
   } catch (error) {
-    if (dialog.open && dialog.dataset.fileKey === key) body.textContent = error.message;
+    if (dialog.open && dialog.dataset.fileKey === key) {
+      page.classList.add("artifact-preview-empty");
+      page.textContent = error.message;
+    }
   }
 }
 
@@ -817,43 +883,27 @@ function chatBubble(role, text, note, attachments = []) {
 }
 
 function artifactControls(run, bubble) {
-  if (run.artifacts?.length) {
-    const files = document.createElement("div");
-    files.className = "chat-file-list";
-    for (const artifact of run.artifacts) files.append(fileCard(artifact));
-    bubble.append(files);
+  if (!run.artifacts?.length) return;
+  const files = document.createElement("div");
+  files.className = "chat-file-list";
+  for (const artifact of run.artifacts) files.append(fileCard(artifact));
+  bubble.append(files);
+}
+
+function knowledgeSources(run, bubble) {
+  const sources = run.response?.maximus_knowledge_sources || [];
+  if (!sources.length) return;
+  const list = document.createElement("div");
+  list.className = "chat-file-list";
+  for (const source of sources) {
+    const link = document.createElement("a");
+    link.href = source.url;
+    link.className = "chat-file-card";
+    link.textContent = `${source.title}${source.page ? ` · p. ${source.page}` : ""}`;
+    link.setAttribute("download", "");
+    list.append(link);
   }
-  const menu = document.createElement("details");
-  menu.className = "chat-artifact-menu";
-  const summary = document.createElement("summary");
-  summary.textContent = "Criar arquivo";
-  menu.append(summary);
-  const choices = document.createElement("div");
-  for (const format of ["pdf", "xlsx", "csv"]) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.textContent = format.toUpperCase();
-    button.addEventListener("click", async () => {
-      choices.querySelectorAll("button").forEach(item => { item.disabled = true; });
-      summary.textContent = "Criando arquivo…";
-      try {
-        const artifact = await api(`/api/chat/runs/${run.run_id}/artifacts`, {
-          method: "POST", body: JSON.stringify({ format })
-        });
-        run.artifacts ||= [];
-        if (!run.artifacts.some(item => item.id === artifact.id)) run.artifacts.push(artifact);
-        renderChat();
-        openFilePreview(artifact);
-      } catch (error) {
-        summary.textContent = "Criar arquivo";
-        choices.querySelectorAll("button").forEach(item => { item.disabled = false; });
-        status(error.message, true);
-      }
-    });
-    choices.append(button);
-  }
-  menu.append(choices);
-  bubble.append(menu);
+  bubble.append(list);
 }
 
 function renderChat() {
@@ -884,6 +934,7 @@ function renderChat() {
       bubble.dataset.runId = run.run_id;
       bubble.dataset.role = "assistant";
       if (run.outcome === "completed") artifactControls(run, bubble);
+      knowledgeSources(run, bubble);
       transcript.append(bubble);
     }
     else if (run.outcome !== "completed") transcript.append(chatBubble("assistant", "", run.outcome === "open" ? "Resposta em andamento" : "Resposta indisponível. A mensagem não foi reenviada."));
@@ -1011,7 +1062,7 @@ function renderConversationList() {
     remove.innerHTML = '<svg class="ui-icon" aria-hidden="true"><use href="#icon-trash"/></svg><span>Excluir</span>';
     remove.addEventListener("click", async () => {
       menu.hidePopover();
-      if (state.chat.busy || !window.confirm(`Excluir a conversa “${conversation.title || "Conversa sem título"}”?`)) return;
+      if (state.chat.busy || !await confirmAction("Excluir conversa?", `“${conversation.title || "Conversa sem título"}” será removida do seu histórico.`)) return;
       try {
         await api(`/api/chat/conversations/${conversation.id}`, { method: "DELETE" });
         if (state.chat.conversationId === conversation.id) $("chat-new").click();
@@ -1110,6 +1161,7 @@ async function sendChatMessage(pending) {
   renderChat();
   try {
     const response = await fetch("/api/chat/messages", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "Accept": "text/event-stream" }, body: JSON.stringify({ client_message_id: pending.id, credential_id: pending.credentialId, model: "gpt-6-luna", text: pending.text, attachments: pending.attachments, conversation_id: pending.conversationId, new_conversation: !pending.conversationId, project_id: pending.conversationId ? null : pending.projectId }) });
+    const artifactToolsUnsupported = response.headers.get("X-Maximus-Artifact-Tool") === "unsupported";
     if (version !== sessionVersion) return;
     if (response.status === 401) { clearSession(); return; }
     if (response.status === 409) {
@@ -1138,30 +1190,18 @@ async function sendChatMessage(pending) {
     state.chat.pending = null;
     await loadChat();
     const completed = state.chat.runs.find(run => run.run_id === runId && run.outcome === "completed");
-    if (completed && !pending.error && requestsPdf(pending.text)) {
-      try {
-        const artifact = await api(`/api/chat/runs/${runId}/artifacts`, {
-          method: "POST", body: JSON.stringify({ format: "pdf" })
-        });
-        completed.artifacts ||= [];
-        if (!completed.artifacts.some(item => item.id === artifact.id)) completed.artifacts.push(artifact);
-        renderChat();
-        status("PDF pronto para visualizar ou baixar.");
-      } catch (error) { status(`A resposta foi salva, mas o PDF não foi criado: ${error.message}`, true); }
-    }
+    if (!pending.error && completed?.artifacts?.length) status("Arquivo pronto para visualizar ou baixar.");
     await loadConversations();
     if (pending.error) status(pending.error, true);
+    if (artifactToolsUnsupported && !state.chat.artifactToolsWarningShown) {
+      state.chat.artifactToolsWarningShown = true;
+      status("Esta conexão não aceita geração automática de arquivos. O conteúdo continua disponível na conversa.", true);
+    }
     if (!state.chat.title && state.chat.conversationId && state.chat.runs.some(run => run.outcome === "completed")) {
       try {
         const result = await api(`/api/chat/conversations/${state.chat.conversationId}/suggest-title`, { method: "POST" });
         if (result.title) { state.chat.title = result.title; renderChat(); await loadConversations(); }
       } catch { /* A conversa continua disponível para renomeação manual. */ }
-    }
-    if (completed && !pending.error) {
-      try {
-        const result = await api(`/api/chat/runs/${runId}/learn`, { method: "POST" });
-        if (result.updated && $("context-dialog").open && $("context-scope").value === "profile") await loadContextNotes();
-      } catch { status("A resposta foi salva, mas o perfil automático não foi atualizado.", true); }
     }
   } catch (error) {
     if (version !== sessionVersion) return;
@@ -1411,8 +1451,69 @@ async function loadGovernance() {
     renderGovernanceRuns(runs.runs || [], false);
     fillRows("governance-findings", (findings.findings || []).map(item => metadataRow(item.category, `${item.confidence} · ${new Date(item.created_at).toLocaleString("pt-BR")}`, item.run_id)), "Sem achados recentes.");
     fillRows("governance-alerts", (alerts.alerts || []).map(item => metadataRow(`Alerta · ${item.category}`, item.status, item.run_id)), "Sem alertas recentes.");
+    await loadKnowledgeDepartments();
   } catch (error) { if (state.screen === "governance") status(error.message, true); }
 }
+
+async function loadKnowledgeDepartments() {
+  const result = await api("/api/governance/knowledge/departments");
+  const select = $("knowledge-department");
+  const previous = select.value;
+  select.replaceChildren();
+  for (const department of result.departments || []) {
+    const option = document.createElement("option");
+    option.value = department.id;
+    option.textContent = `${department.code} · ${department.name}`;
+    select.append(option);
+  }
+  if ([...select.options].some(option => option.value === previous)) select.value = previous;
+  await loadKnowledgeDocuments();
+}
+
+async function loadKnowledgeDocuments() {
+  const departmentId = $("knowledge-department").value;
+  const target = $("knowledge-documents");
+  target.replaceChildren();
+  if (!departmentId) return;
+  const result = await api(`/api/governance/knowledge/departments/${encodeURIComponent(departmentId)}/documents`);
+  for (const doc of result.documents || []) {
+    const row = document.createElement("div");
+    row.className = "metadata-row";
+    const title = document.createElement("strong");
+    title.textContent = doc.name;
+    const meta = document.createElement("small");
+    meta.textContent = `${Math.ceil(doc.size / 1024)} KB · ${new Date(doc.created_at).toLocaleDateString("pt-BR")}`;
+    const remove = document.createElement("button");
+    remove.type = "button"; remove.className = "text-button"; remove.textContent = "Remover";
+    remove.addEventListener("click", async () => {
+      if (remove.dataset.confirm !== "yes") {
+        remove.dataset.confirm = "yes";
+        remove.textContent = "Confirmar remoção";
+        return;
+      }
+      try { await api(`/api/governance/knowledge/documents/${encodeURIComponent(doc.id)}`, { method: "DELETE" }); await loadKnowledgeDocuments(); }
+      catch (error) { status(error.message, true); }
+    });
+    row.append(title, meta, remove); target.append(row);
+  }
+  if (!target.children.length) { const empty = document.createElement("p"); empty.textContent = "Nenhum documento neste departamento."; target.append(empty); }
+}
+
+$("knowledge-department").addEventListener("change", loadKnowledgeDocuments);
+$("knowledge-upload").addEventListener("click", async () => {
+  const file = $("knowledge-file").files[0];
+  const department_id = $("knowledge-department").value;
+  if (!file || !department_id) { status("Selecione um departamento e um arquivo.", true); return; }
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    let binary = "";
+    for (let i = 0; i < bytes.length; i += 32768) binary += String.fromCharCode(...bytes.subarray(i, i + 32768));
+    await api("/api/governance/knowledge/documents", { method: "POST", body: JSON.stringify({ department_id, name: file.name, data: btoa(binary) }) });
+    $("knowledge-file").value = "";
+    await loadKnowledgeDocuments();
+    status("Documento indexado para o departamento.");
+  } catch (error) { status(error.message, true); }
+});
 
 function renderGovernanceRuns(runs, append) {
   const target = $("governance-runs");

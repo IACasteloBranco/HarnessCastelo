@@ -152,6 +152,12 @@ O prompt do chat informa à IA que o Maximus gera arquivos. Quando o usuário pe
 
 Uma conta `collaborator` pode receber `employees.can_govern = true` por uma operação administrativa no banco e acessar a governança sem perder o chat. A permissão é conferida em cada requisição; a interface mostra Governança na barra lateral e no menu de perfil dessa conta. Contas sem a permissão continuam recebendo `403` nas rotas de governança.
 
+## Biblioteca compartilhada por departamento (piloto)
+
+Na Governança, responsáveis podem enviar PDF pesquisável, TXT ou Markdown para um departamento da própria organização e remover arquivos. O conteúdo e os trechos ficam criptografados; embeddings `paraphrase-multilingual-MiniLM-L12-v2` são gerados localmente e armazenados no PostgreSQL com pgvector. O modelo pode chamar a busca durante a conversa quando documentos internos forem relevantes. A busca sempre usa organização e departamento da sessão autenticada, e a resposta concluída mostra links para os documentos usados.
+
+A migração `0017_department_knowledge` cria a extensão `vector` e as tabelas do índice. A imagem do banco local usa `pgvector/pgvector`; aplique as migrações após atualizar a imagem. A primeira indexação/consulta baixa o modelo de embeddings; o piloto limita arquivos a 15 MB e PDFs a 600 páginas. PDFs digitalizados sem camada de texto não são indexados (OCR fica fora do piloto).
+
 ## Análise e alertas da fase 4
 
 O backend analisa a mensagem nova antes de encaminhá-la. O chat e as rotas de proxy usam o mesmo ponto de admissão. A análise registra achados sem bloquear a mensagem. As regras atuais marcam cabeçalhos de chave privada PEM como alta confiança; padrões de CPF, CNPJ e pedidos explícitos para ignorar instruções ficam para revisão. Os achados guardam categoria, regra e confiança, sem copiar trechos do prompt.

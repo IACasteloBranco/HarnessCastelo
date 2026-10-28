@@ -85,4 +85,4 @@ Crie entrada para o papel `governance` e para colaboradores com `can_govern`. Mo
 
 ## Validação visual
 
-O Chrome está instalado em `/opt/google/chrome/chrome`. Revise login, troca de senha e conexão OAuth em desktop e celular com o Playwright. Use respostas simuladas da API para conferir os estados sem uma conta ChatGPT real; valide os contratos reais com o gateway em HTTPS.
+Instale o Chromium do Playwright com `python -m playwright install chromium`. Revise login, troca de senha e conexão OAuth em desktop e celular com o Playwright. Use respostas simuladas da API para conferir os estados sem uma conta ChatGPT real; valide os contratos reais com o gateway em HTTPS.

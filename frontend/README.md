@@ -23,11 +23,11 @@ python -c "from faster_whisper import WhisperModel; WhisperModel('small', device
 
 O modelo ocupa cerca de 500 MB. A gravação exige acesso ao microfone e uma origem HTTPS ou `localhost`.
 
-Em uma resposta concluída, **Criar arquivo** oferece PDF, XLSX e CSV. O PDF é montado com o texto da resposta. Para XLSX e CSV, a IA organiza o pedido e a resposta em colunas e linhas numa chamada adicional, contabilizada na cota. O arquivo fica no histórico da conversa como cartão para download. A geração não executa código da IA nem importa arquivos de outras conversas. O arquivo criptografado é acessível apenas ao colaborador dono da conversa e sai com o run na retenção de 90 dias. A planilha deve ser conferida antes de uso contábil.
+O modelo decide quando um arquivo é útil e pode criar PDF, XLSX ou CSV como parte da resposta. O PDF usa a identidade visual Maximus (logotipo, cabeçalho, rodapé e paginação) e preserva títulos, listas, citações, blocos de código e tabelas Markdown. A planilha XLSX recebe cabeçalho e cores da marca, filtro, larguras de coluna e cabeçalho congelado. O arquivo fica no histórico da conversa como cartão para download. A geração não executa código da IA nem importa arquivos de outras conversas. O arquivo criptografado é acessível apenas ao colaborador dono da conversa e sai com o run na retenção de 90 dias. A planilha deve ser conferida antes de uso contábil.
 
 Ao clicar no cartão de um arquivo criado, o colaborador abre a prévia. O PDF aparece no navegador; CSV e XLSX aparecem em tabela com até 100 linhas. O botão **Baixar arquivo** no visualizador entrega o arquivo completo. A prévia usa a mesma verificação de acesso do download e não faz nova chamada à IA.
 
-O chat informa à IA que esses arquivos podem ser criados no Maximus. Um pedido explícito de conteúdo em PDF cria o arquivo automaticamente após a resposta completa e mostra o cartão no chat. Uma pergunta apenas sobre a capacidade recebe orientação para usar **Criar arquivo**. Respostas antigas continuam como foram registradas; é possível criar o PDF pelo menu sob a resposta desejada.
+O chat oferece à IA a ferramenta `create_artifact`. A IA decide durante a resposta se deve criar PDF, XLSX ou CSV e prepara o conteúdo; o Maximus valida e renderiza o arquivo após a conclusão, e o cartão aparece na conversa. Perguntas apenas sobre a capacidade não devem gerar arquivo. Respostas antigas continuam como foram registradas; é possível criar um arquivo pelo menu sob a resposta desejada.
 
 O FastAPI serve `frontend/public/` e `/api` na mesma origem. Para testar no navegador local com o cookie de sessão `Secure`, inicie o gateway por HTTPS na raiz do projeto:
 
@@ -44,8 +44,27 @@ Abra `https://localhost:18443/` e aceite o certificado local no navegador. Confi
 
 O servidor HTTP existente em `127.0.0.1:18080` permanece disponível para clientes de proxy. O login no navegador requer HTTPS; em produção, use um certificado confiável e preserve a mesma origem para a interface e `/api`.
 
-Para conferir as telas e os fluxos com respostas simuladas, deixe o servidor HTTPS ativo e execute `python3 frontend/tests/smoke.py`. O teste usa Playwright e o Chrome em `/opt/google/chrome/chrome`. Ele salva capturas em `/tmp/maximus-*-preview*.png` e verifica desktop, celular, envio de mensagem, reconexão e a leitura explícita de um run.
+No Windows, execute pelo PowerShell com o ambiente virtual ativo. Gere primeiro o certificado local com OpenSSL e inicie o gateway:
+
+```powershell
+New-Item -ItemType Directory -Force .tmp
+openssl req -x509 -newkey rsa:2048 -nodes -days 7 -keyout .tmp/dev-key.pem -out .tmp/dev-cert.pem -subj '/CN=localhost' -addext 'subjectAltName=DNS:localhost,IP:127.0.0.1'
+python -m uvicorn gateway.main:app --host 127.0.0.1 --port 18443 --ssl-keyfile .tmp/dev-key.pem --ssl-certfile .tmp/dev-cert.pem
+```
+
+Em outro PowerShell, execute `python frontend/tests/smoke.py`.
+No Windows, execute pelo PowerShell com o ambiente virtual ativo. Gere primeiro o certificado local com OpenSSL e inicie o gateway:
+
+```powershell
+New-Item -ItemType Directory -Force .tmp
+openssl req -x509 -newkey rsa:2048 -nodes -days 7 -keyout .tmp/dev-key.pem -out .tmp/dev-cert.pem -subj '/CN=localhost' -addext 'subjectAltName=DNS:localhost,IP:127.0.0.1'
+python -m uvicorn gateway.main:app --host 127.0.0.1 --port 18443 --ssl-keyfile .tmp/dev-key.pem --ssl-certfile .tmp/dev-cert.pem
+```
+
+Em outro PowerShell, execute `python frontend/tests/smoke.py`.
+
+Para conferir as telas e os fluxos com respostas simuladas, instale o navegador do Playwright com `python -m playwright install chromium`, deixe o servidor HTTPS ativo e execute `python frontend/tests/smoke.py`. O teste usa o Chromium instalado pelo Playwright e salva capturas no diret?rio tempor?rio do sistema.
 
 ## Prévia local sem contas reais
 
-Execute `.venv/bin/python -m frontend.dev_preview` e abra `http://localhost:18444/`. Entre com `DEMOCHAT` e `demo12345` para ver o chat, ou com `DEMOGOV` e `demo12345` para ver o console. Saia da primeira conta antes de entrar na outra. A prévia usa apenas dados simulados em memória e não consulta o banco nem envia mensagens à IA. Para testar os dois acessos pelo navegador automatizado, execute `python3 frontend/tests/preview.py` enquanto a prévia estiver ativa.
+Execute `python -m frontend.dev_preview` e abra `http://localhost:18444/`. Entre com `DEMOCHAT` e `demo12345` para ver o chat, ou com `DEMOGOV` e `demo12345` para ver o console. Saia da primeira conta antes de entrar na outra. A prévia usa apenas dados simulados em memória e não consulta o banco nem envia mensagens à IA. Para testar os dois acessos pelo navegador automatizado, execute `python frontend/tests/preview.py` enquanto a prévia estiver ativa.

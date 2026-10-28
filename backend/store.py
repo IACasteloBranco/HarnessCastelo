@@ -230,6 +230,7 @@ async def _record_run(session, credential: CredentialRecord, request: RequestRec
         conversation_id=chat.conversation_id if chat else None,
         client_message_id=chat.client_message_id if chat else None,
         chat_prompt=chat.text if chat else None,
+        context_learning_status="pending" if chat else "done",
         started_at=now, method=request.method, path=request.path,
         model=payload.get("model") if isinstance(payload, dict) else None,
         request_body=body_text,
@@ -486,6 +487,8 @@ async def append_events(run_id: UUID, events: Sequence[StreamEvent], http_status
                     "response.incomplete": "incomplete",
                     "error": "failed",
                 }[event.event_type]
+                if run.outcome != "completed":
+                    run.context_learning_status = "skipped"
                 run.finished_at = datetime.now(timezone.utc)
 
 
@@ -501,4 +504,6 @@ async def finish_transport(
             run.http_status = http_status
             run.outcome = outcome
             run.error_code = error_code
+            if run.conversation_id is not None and (outcome != "completed" or run.response_json is None):
+                run.context_learning_status = "skipped"
             run.finished_at = datetime.now(timezone.utc)

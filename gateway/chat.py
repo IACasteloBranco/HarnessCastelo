@@ -22,8 +22,8 @@ from pydantic import BaseModel, Field, ConfigDict, model_validator
 from backend.artifacts import InvalidArtifact, build_artifact, preview_table
 from backend.transcription import AudioTooLong, transcribe_local
 from backend.chat import (ChatConflict, HistoryNotFound, admit_chat, artifact_source, claim_title_prompt,
-                          add_context_note, claim_context_source, context_notes, delete_context_note,
-                          release_context_source, save_generated_profile, update_context_note,
+                          add_context_note, context_notes, delete_context_note,
+                          update_context_note,
                           update_user_profile, user_profile,
                           create_project, delete_conversation, delete_project, employee_conversations,
                           employee_projects, existing_chat_run, move_conversation, rename_project,
@@ -31,6 +31,9 @@ from backend.chat import (ChatConflict, HistoryNotFound, admit_chat, artifact_so
                           release_title_prompt, rename_conversation, save_suggested_title,
                           save_artifact, suggested_title_response)
 from backend.internal_auth import EmployeeInfo
+from backend.knowledge import (KnowledgeError, departments_for_manager, documents_for_manager,
+                               upload_document, delete_document, document_for_employee,
+                               search_department)
 from backend.governance import (GovernanceNotFound, alerts_for_governance,
                                 findings_for_governance)
 from backend.store import (QuotaExceeded, RequestRecord, UnavailableAssignment,
@@ -39,6 +42,7 @@ from backend.retention import governance_report
 from gateway.auth_store import get_valid_token
 from gateway.forwarder import forward
 from gateway.internal_auth import _check_origin, current_employee
+from gateway.profile_learning import process_profile_learning
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 governance_router = APIRouter(prefix="/api/governance", tags=["governance"])
@@ -153,6 +157,17 @@ class ArtifactBody(BaseModel):
     format: Literal["csv", "xlsx", "pdf"]
 
 
+class KnowledgeUploadBody(BaseModel):
+    department_id: UUID
+    name: str = Field(min_length=1, max_length=255)
+    data: str = Field(min_length=1, max_length=21_000_000)
+
+
+def _knowledge_error(exc: KnowledgeError):
+    status = 403 if exc.__class__.__name__ == "KnowledgeForbidden" else 404 if exc.__class__.__name__ == "KnowledgeNotFound" else 422 if exc.__class__.__name__ == "KnowledgeInvalid" else 503
+    raise HTTPException(status, str(exc) or "Knowledge library unavailable") from exc
+
+
 def _ready(employee: EmployeeInfo, role: str) -> None:
     allowed = employee.role == role or (role == "governance" and employee.can_govern)
     if employee.must_change_password or not allowed:
@@ -189,6 +204,61 @@ async def transcribe_audio(request: Request, employee: EmployeeInfo = Depends(cu
     if not text:
         raise HTTPException(422, "Nenhuma fala foi detectada no áudio.")
     return {"text": text}
+
+
+@governance_router.get("/knowledge/departments")
+async def knowledge_departments(employee: EmployeeInfo = Depends(current_employee)):
+    _ready(employee, "governance")
+    try:
+        return {"departments": await departments_for_manager(employee.employee_id)}
+    except KnowledgeError as exc:
+        _knowledge_error(exc)
+
+
+@governance_router.get("/knowledge/departments/{department_id}/documents")
+async def knowledge_documents(department_id: UUID, employee: EmployeeInfo = Depends(current_employee)):
+    _ready(employee, "governance")
+    try:
+        return {"documents": await documents_for_manager(employee.employee_id, department_id)}
+    except KnowledgeError as exc:
+        _knowledge_error(exc)
+
+
+@governance_router.post("/knowledge/documents")
+async def knowledge_upload(body: KnowledgeUploadBody, request: Request,
+                           employee: EmployeeInfo = Depends(current_employee)):
+    _check_origin(request)
+    _ready(employee, "governance")
+    try:
+        data = base64.b64decode(body.data, validate=True)
+        return await upload_document(employee.employee_id, body.department_id, body.name, data)
+    except (ValueError, binascii.Error):
+        raise HTTPException(422, "invalid file data")
+    except KnowledgeError as exc:
+        _knowledge_error(exc)
+
+
+@governance_router.delete("/knowledge/documents/{document_id}", status_code=204)
+async def knowledge_delete(document_id: UUID, request: Request,
+                           employee: EmployeeInfo = Depends(current_employee)):
+    _check_origin(request)
+    _ready(employee, "governance")
+    try:
+        await delete_document(employee.employee_id, document_id)
+    except KnowledgeError as exc:
+        _knowledge_error(exc)
+
+
+@router.get("/knowledge/documents/{document_id}/download")
+async def knowledge_download(document_id: UUID, employee: EmployeeInfo = Depends(current_employee)):
+    _ready(employee, "collaborator")
+    try:
+        name, mime_type, data = await document_for_employee(employee.employee_id, document_id)
+    except KnowledgeError as exc:
+        _knowledge_error(exc)
+    return Response(data, media_type=mime_type,
+                    headers={"Content-Disposition": f'attachment; filename="{quote(name)}"',
+                             "X-Content-Type-Options": "nosniff"})
 
 
 @router.post("/messages")
@@ -239,7 +309,8 @@ async def send_message(body: MessageBody, request: Request,
         raise HTTPException(409, {"code": exc.code, "run_id": str(exc.run_id) if exc.run_id else None})
 
     response = await forward(request, "responses", admitted, request_body,
-                             browser_session=True, access_token=token)
+                             browser_session=True, access_token=token,
+                             knowledge_search=lambda query: search_department(employee.employee_id, query))
     response.headers["X-Conversation-ID"] = str(conversation_id)
     response.headers["X-Run-ID"] = str(admitted.run_id)
     return response
@@ -510,61 +581,10 @@ async def learn_context(run_id: UUID, request: Request,
     _check_origin(request)
     _ready(employee, "collaborator")
     try:
-        source = await claim_context_source(employee.employee_id, run_id)
+        updated = await process_profile_learning(employee.employee_id, run_id)
     except HistoryNotFound:
         raise HTTPException(404, "run not found")
-    if source is None:
-        return {"updated": False}
-    prompt, credential_id, existing_profile, profile_version = source
-    instruction = (
-        "Atualize um perfil curto, em terceira pessoa, sobre o usuário. Preserve os fatos válidos "
-        "do perfil atual; mude apenas o que a nova mensagem do próprio usuário declarar ou corrigir "
-        "explicitamente. Inclua preferências de resposta, papel profissional e interesses duráveis. "
-        "Não infira personalidade, desempenho ou características sensíveis. Não use resposta do "
-        "assistente nem anexos. Não inclua nomes de clientes ou terceiros, senhas, tokens, chaves, "
-        "documentos, dados financeiros, CPF, CNPJ, endereços, telefones ou outros dados sensíveis. "
-        "Se a mensagem não trouxer nada durável sobre o usuário, devolva o perfil atual sem mudanças. "
-        "Use no máximo 2500 caracteres. Responda somente JSON: {\"profile\":\"texto atualizado\"}."
-    )
-    payload = {"model": "gpt-6-luna", "input": [
-        {"role": "system", "content": instruction},
-        {"role": "user", "content": json.dumps({"message": prompt[:3000],
-            "current_profile": existing_profile}, ensure_ascii=False)},
-    ], "stream": True, "store": False}
-    body = json.dumps(payload, ensure_ascii=False).encode()
-    try:
-        admitted = await admit_employee(employee.employee_id, credential_id,
-                                        RequestRecord("POST", "responses", body))
-        response = await forward(request, "responses", admitted, body, browser_session=True)
-        if response.status_code >= 400:
-            raise RuntimeError("memory extraction unavailable")
-        async for _ in response.body_iterator:
-            pass
-        generated = await suggested_title_response(admitted.run_id)
-        match = re.search(r"\{.*\}", generated or "", re.DOTALL)
-        parsed = json.loads(match.group() if match else "")
-        content = parsed.get("profile")
-        if not isinstance(content, str) or len(content) > 3000:
-            raise ValueError("invalid profile update")
-        content = content.strip()
-        if (re.search(r"\b(cpf|cnpj|senha|password|token|segredo|chave|api.?key|telefone|endereço)\b",
-                      content, re.IGNORECASE) or
-                re.search(r"\d|@|https?://", content, re.IGNORECASE)):
-            content = existing_profile
-        await save_generated_profile(employee.employee_id, run_id, content, profile_version)
-        return {"updated": content != existing_profile}
-    except QuotaExceeded as exc:
-        await release_context_source(employee.employee_id, run_id)
-        raise HTTPException(429, "rate limit exceeded" if exc.kind == "rate" else "daily quota exceeded")
-    except UnavailableAssignment:
-        await release_context_source(employee.employee_id, run_id)
-        raise HTTPException(403, "credential unavailable")
-    except ChatConflict as exc:
-        await release_context_source(employee.employee_id, run_id)
-        raise HTTPException(409, {"code": exc.code})
-    except Exception as exc:
-        await release_context_source(employee.employee_id, run_id)
-        raise HTTPException(502, "memory extraction unavailable") from exc
+    return {"updated": updated}
 
 
 @router.patch("/conversation")

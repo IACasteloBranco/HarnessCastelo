@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from tempfile import gettempdir
 from playwright.sync_api import sync_playwright
 
 
@@ -12,9 +13,10 @@ def mock(route, body, status=200, content_type="application/json", headers=None)
 
 
 with sync_playwright() as playwright:
-    browser = playwright.chromium.launch(headless=True, executable_path="/opt/google/chrome/chrome",
-                                         args=["--no-sandbox", "--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream"])
-    for role, screenshot in [("collaborator", "/tmp/maximus-chat-preview.png"), ("governance", "/tmp/maximus-governance-preview.png")]:
+    browser = playwright.chromium.launch(headless=True,
+                                         args=["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream"])
+    for role, screenshot in [("collaborator", "maximus-chat-preview.png"), ("governance", "maximus-governance-preview.png")]:
+        screenshot = str(Path(gettempdir()) / screenshot)
         context = browser.new_context(viewport={"width": 1448, "height": 1086}, ignore_https_errors=True)
         page = context.new_page()
         errors = []
@@ -53,6 +55,11 @@ with sync_playwright() as playwright:
                 return mock(route, {"text": "Áudio transcrito para revisão."})
             if path == "chat/messages":
                 sent.append(request.post_data_json)
+                if len(sent) == 1:
+                    artifacts.extend([
+                        {"id": "44444444-4444-4444-8444-444444444444", "name": "maximus-teste.pdf", "format": "pdf", "size": 16},
+                        {"id": "55555555-5555-4555-8555-555555555555", "name": "maximus-teste.csv", "format": "csv", "size": 16},
+                    ])
                 answer = {"type": "response.completed", "response": {"output": [{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Resposta de teste"}]}]}}
                 return mock(route, 'event: response.output_text.delta\ndata: {"delta":"Resposta de "}\n\nevent: response.output_text.delta\ndata: {"delta":"teste"}\n\nevent: response.completed\ndata: ' + json.dumps(answer) + '\n\n', content_type="text/event-stream", headers={"X-Conversation-ID": "22222222-2222-4222-8222-222222222222", "X-Run-ID": f"11111111-1111-4111-8111-{len(sent):012d}"})
             if path == "chat/attachments/33333333-3333-4333-8333-333333333333":
@@ -60,12 +67,6 @@ with sync_playwright() as playwright:
                     "Content-Type": "text/plain", "Content-Disposition": "attachment; filename=notas.txt"})
             if path == "chat/attachments/33333333-3333-4333-8333-333333333333/preview":
                 return mock(route, {"text": "dados ficticios", "truncated": False})
-            if path.endswith("/artifacts") and path.startswith("chat/runs/"):
-                format = request.post_data_json["format"]
-                artifact = {"id": "44444444-4444-4444-8444-444444444444" if format == "pdf" else "55555555-5555-4555-8555-555555555555",
-                            "name": f"maximus-teste.{format}", "format": format, "size": 16}
-                artifacts.append(artifact)
-                return mock(route, artifact)
             if path == "chat/artifacts/55555555-5555-4555-8555-555555555555/preview":
                 return mock(route, {"columns": ["Item", "Quantidade"], "rows": [["A", "5"]], "truncated": False})
             if path == "chat/artifacts/44444444-4444-4444-8444-444444444444/preview":
@@ -92,32 +93,32 @@ with sync_playwright() as playwright:
             page.get_by_role("heading", name="Como posso ajudar hoje?").wait_for()
             page.locator("#chat-sidebar-governance").click()
             page.get_by_role("heading", name="Visão de uso").wait_for()
-            page.locator("#chat-nav").click()
+            page.locator("#chat-sidebar-chat").click()
             page.get_by_role("heading", name="Como posso ajudar hoje?").wait_for()
             assert page.locator("#chat-side-user").is_visible()
             assert not page.locator("#chat-header-logout").is_visible()
             page.locator("#chat-side-user").click()
             assert page.locator("#chat-user-menu").is_visible()
-            page.screenshot(path="/tmp/maximus-chat-profile-menu.png", full_page=True)
+            page.screenshot(path=str(Path(gettempdir()) / "maximus-chat-profile-menu.png"), full_page=True)
             page.keyboard.press("Escape")
             assert not page.locator("#chat-user-menu").is_visible()
             assert not page.locator(".credential-picker").is_visible()
             assert not page.locator("#chat-header-accounts").is_visible()
             assert page.locator("#chat-credential").input_value() == "CONTA01"
-            page.screenshot(path="/tmp/maximus-chat-empty-preview.png", full_page=True)
+            page.screenshot(path=str(Path(gettempdir()) / "maximus-chat-empty-preview.png"), full_page=True)
             page.set_viewport_size({"width": 1672, "height": 941})
-            page.screenshot(path="/tmp/maximus-chat-reference-size.png", full_page=True)
+            page.screenshot(path=str(Path(gettempdir()) / "maximus-chat-reference-size.png"), full_page=True)
             page.set_viewport_size({"width": 390, "height": 844})
             assert page.locator("#chat-side-user").is_visible()
             page.locator("#chat-side-user").click()
             assert page.locator("#chat-sidebar-logout").is_visible()
             assert page.locator("#chat-menu-governance").is_visible()
             page.keyboard.press("Escape")
-            page.screenshot(path="/tmp/maximus-chat-empty-mobile.png", full_page=True)
+            page.screenshot(path=str(Path(gettempdir()) / "maximus-chat-empty-mobile.png"), full_page=True)
             page.locator("#chat-add-menu summary").click()
             assert page.get_by_role("button", name="Transcrever áudio").is_visible()
             assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
-            page.screenshot(path="/tmp/maximus-chat-add-menu-mobile.png")
+            page.screenshot(path=str(Path(gettempdir()) / "maximus-chat-add-menu-mobile.png"))
             page.keyboard.press("Escape")
             assert not page.locator("#chat-add-menu").evaluate("element => element.open")
             assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
@@ -126,8 +127,8 @@ with sync_playwright() as playwright:
             page.locator("#chat-form button[type=submit]").click()
             page.get_by_text("Resposta de teste").wait_for()
             assert page.locator(".chat-bubble strong").count() == 0
-            page.locator(".chat-artifact-menu summary").first.click()
-            page.locator(".chat-artifact-menu button", has_text="PDF").first.click()
+            assert page.locator(".chat-artifact-menu").count() == 0
+            page.get_by_role("button", name="Visualizar maximus-teste.pdf").click()
             page.locator("#artifact-dialog").wait_for(state="visible")
             assert page.locator("#artifact-dialog iframe").count() == 1
             with page.expect_download() as generated_download:
@@ -138,14 +139,13 @@ with sync_playwright() as playwright:
             page.locator("#artifact-dialog").wait_for(state="visible")
             page.keyboard.press("Escape")
             assert not page.locator("#artifact-dialog").is_visible()
-            page.locator(".chat-artifact-menu summary").first.click()
-            page.locator(".chat-artifact-menu button", has_text="CSV").first.click()
+            page.get_by_role("button", name="Visualizar maximus-teste.csv").click()
             page.locator("#artifact-dialog-body table").wait_for()
             assert page.locator("#artifact-dialog-body td").first.text_content() == "A"
-            page.screenshot(path="/tmp/maximus-artifact-table-preview.png")
+            page.screenshot(path=str(Path(gettempdir()) / "maximus-artifact-table-preview.png"))
             page.set_viewport_size({"width": 390, "height": 844})
             assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
-            page.screenshot(path="/tmp/maximus-artifact-table-mobile.png")
+            page.screenshot(path=str(Path(gettempdir()) / "maximus-artifact-table-mobile.png"))
             page.set_viewport_size({"width": 1448, "height": 1086})
             page.locator("#artifact-dialog-close").click()
             assistant_background = page.locator(".chat-bubble.assistant").evaluate("element => getComputedStyle(element).backgroundColor")
@@ -154,21 +154,22 @@ with sync_playwright() as playwright:
             page.get_by_label("Opções para Conversa sem título").click()
             assert page.get_by_role("button", name="Renomear").is_visible()
             assert page.get_by_role("button", name="Excluir").is_visible()
-            page.screenshot(path="/tmp/maximus-conversation-menu.png")
+            page.screenshot(path=str(Path(gettempdir()) / "maximus-conversation-menu.png"))
             page.get_by_role("button", name="Renomear").click()
             page.locator("#chat-title-input").fill("Dúvidas de teste")
             page.locator("#chat-title-form button[type=submit]").click()
             page.get_by_text("Dúvidas de teste").first.wait_for()
             assert titles == ["Dúvidas de teste"]
             page.get_by_label("Opções para Dúvidas de teste").click()
-            page.once("dialog", lambda dialog: dialog.dismiss())
             page.get_by_role("button", name="Excluir").click()
+            page.locator("#confirm-dialog").wait_for(state="visible")
+            page.locator("#confirm-dialog-cancel").click()
             assert page.get_by_label("Opções para Dúvidas de teste").count() == 1
             page.set_viewport_size({"width": 390, "height": 844})
             page.locator("#chat-mobile-list").click()
             page.get_by_label("Opções para Dúvidas de teste").click()
             assert page.get_by_role("button", name="Renomear").is_visible()
-            page.screenshot(path="/tmp/maximus-conversation-menu-mobile.png")
+            page.screenshot(path=str(Path(gettempdir()) / "maximus-conversation-menu-mobile.png"))
             page.set_viewport_size({"width": 1448, "height": 1086})
             assert sent[0]["client_message_id"]
             partial = page.evaluate("""async () => {
@@ -183,9 +184,6 @@ with sync_playwright() as playwright:
               return pending.answer;
             }""")
             assert partial == "Parcial"
-            assert page.evaluate("requestsPdf('Faça um resumo em PDF para baixar')")
-            assert not page.evaluate("requestsPdf('Você não consegue gerar um PDF pra eu baixar aqui pelo chat não?')")
-            assert not page.evaluate("requestsPdf('Não quero gerar PDF desse relatório')")
             markup = page.evaluate("""() => {
               const bubble = chatBubble('assistant', '# Título\\n\\n- item\\n\\n<script>window.bad = true</script>');
               document.body.append(bubble);
@@ -200,7 +198,7 @@ with sync_playwright() as playwright:
             assert page.get_by_role("button", name="Adicionar arquivos").is_visible()
             assert page.get_by_role("button", name="Transcrever áudio").is_visible()
             assert page.locator(".chat-add-options").bounding_box()["y"] < page.locator("#chat-add-menu summary").bounding_box()["y"]
-            page.screenshot(path="/tmp/maximus-chat-add-menu-desktop.png")
+            page.screenshot(path=str(Path(gettempdir()) / "maximus-chat-add-menu-desktop.png"))
             with page.expect_file_chooser() as audio_chooser:
                 page.get_by_role("button", name="Transcrever áudio").click()
             audio_chooser.value.set_files({"name": "recado.wav", "mimeType": "audio/wav", "buffer": b"RIFFfake"})

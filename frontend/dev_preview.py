@@ -134,7 +134,9 @@ class PreviewHandler(SimpleHTTPRequestHandler):
             session = self._authorized("collaborator")
             if session:
                 self._json(HTTPStatus.OK, {"text": PROFILES.get(session["code"], ""), "version": 0,
-                                            "updated_at": None})
+                                            "updated_at": None, "source": "manual",
+                                            "source_run_id": None, "quarantined": False,
+                                            "learning_status": None})
             return
         if path == "/api/chat/conversations":
             session = self._authorized("collaborator")
@@ -396,7 +398,9 @@ class PreviewHandler(SimpleHTTPRequestHandler):
         if path == "/api/chat/profile":
             PROFILES[session["code"]] = str(body.get("text", "")).strip()[:3000]
             self._json(HTTPStatus.OK, {"text": PROFILES[session["code"]], "version": 1,
-                                        "updated_at": datetime.now(timezone.utc).isoformat()})
+                                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                                        "source": "manual", "source_run_id": None,
+                                        "quarantined": False, "learning_status": None})
             return
         if path.startswith("/api/chat/context/"):
             note = next((item for item in CONTEXT.get(session["code"], []) if path.endswith(item["id"])), None)
