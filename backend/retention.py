@@ -112,14 +112,14 @@ async def governance_report(actor_id: UUID, start: date, end: date) -> dict:
         await session.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"))
         actor = await _governance_actor(session, actor_id)
         org = str(actor.organization_id)
-        usage = defaultdict(lambda: [0, 0, 0, 0])
+        usage = defaultdict(lambda: [0, 0, 0, 0, 0, 0])
         findings = defaultdict(int)
         archived = (await session.scalars(select(DailyUsage).where(
             DailyUsage.organization_code.in_((org, LEGACY)),
             DailyUsage.day.between(start, end)))).all()
         for row in archived:
             current = usage[(row.department_code, row.day)]
-            for index, value in enumerate((row.runs, row.errors, row.latency_ms, row.latency_samples)):
+            for index, value in enumerate((row.runs, row.errors, row.latency_ms, row.latency_samples, 0, 0)):
                 current[index] += value
         archived_findings = (await session.scalars(select(DailyFinding).where(
             DailyFinding.organization_code.in_((org, LEGACY)),
@@ -146,15 +146,44 @@ async def governance_report(actor_id: UUID, start: date, end: date) -> dict:
             for run_id, category in raw_findings:
                 department, day = scopes[run_id]
                 findings[(department, day, category)] += 1
-        departments = {str(row.id): row.code for row in (await session.scalars(select(Department).where(
-            Department.organization_id == actor.organization_id))).all()}
+        departments = {
+            key: row.code
+            for row in (await session.scalars(select(Department).where(
+                Department.organization_id == actor.organization_id))).all()
+            for key in (str(row.id), row.code)
+        }
+        capture_table = await session.scalar(text("SELECT to_regclass('governance_capture.interactions')"))
+        if capture_table:
+            captures = (await session.execute(text("""
+                SELECT i.department_code,
+                       (CAST(i.received_at AS TIMESTAMPTZ) AT TIME ZONE 'UTC')::date AS day,
+                       i.platform, COUNT(DISTINCT i.interaction_id) AS interactions
+                FROM governance_capture.interactions AS i
+                JOIN public.employees AS employee ON employee.code = i.employee_id
+                    AND employee.organization_id = :organization_id
+                WHERE CAST(i.received_at AS TIMESTAMPTZ) >= :start_at
+                  AND CAST(i.received_at AS TIMESTAMPTZ) < :end_at
+                GROUP BY i.department_code,
+                         (CAST(i.received_at AS TIMESTAMPTZ) AT TIME ZONE 'UTC')::date, i.platform
+            """), {
+                "organization_id": actor.organization_id,
+                "start_at": datetime.combine(start, datetime.min.time(), timezone.utc),
+                "end_at": datetime.combine(end + timedelta(days=1), datetime.min.time(), timezone.utc),
+            })).all()
+            for department, day, platform, interactions in captures:
+                if platform not in {"chatgpt_web", "claude_web"}:
+                    continue
+                current = usage[(department or UNATTRIBUTED, day)]
+                current[4 if platform == "chatgpt_web" else 5] += interactions
         def label(department: str) -> str:
             return departments.get(department, department if department in (LEGACY, UNATTRIBUTED) else UNATTRIBUTED)
 
         return {
             "usage": [{"day": day, "department": label(department),
                        "runs": values[0], "errors": values[1], "latency_ms": values[2],
-                       "latency_samples": values[3]}
+                       "latency_samples": values[3], "chatgpt_interactions": values[4],
+                       "claude_interactions": values[5],
+                       "total_uses": values[0] + values[4] + values[5]}
                       for (department, day), values in sorted(usage.items(), key=lambda x: (x[0][1], x[0][0]))],
             "findings": [{"day": day, "department": label(department),
                           "category": category, "count": count}

@@ -1,6 +1,18 @@
 {
   "manifest_version": 3,
-  "name": "HarnessCastelo Browser",
-  "version": "0.1.0",
-  "description": "Integra o HarnessCastelo ao navegador."
+  "name": "Governança de IA Castelo Branco Contabilidade",
+  "version": "0.6.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvtqRW6IEZvF2UhaplijBJV3t5sJmBJU4BYBO10c6hBBXLXpbZsItn8RglPVhUnGI+nbFY885r1aNnEjW5lvfZTBn0s8aqiqzjvG+j1xNbvBrBq2bFcotu7U7UoAyuB3f7xvXGovIPEGpG+vdTPwl53S1F1wHczPjp78gJBG6fG9U0/I9WjvLnZS9EY/PgzBuUPdTKgLctWIDCIeUw2MYDSsJis7BI9nje+SPFLHQOXNNHek+TbNIx6yCytNpTr1idceMh1z8NV94l02Xqcra/KHvgaOd0U9Qg/UWa7bogvnh7SStB/avdPQN75KobH5uF8wsp0Hf2bneXjTwJLeEKQIDAQAB",
+  "description": "Captura conversas observadas, vinculadas à instalação atribuída.",
+  "permissions": ["storage", "tabs", "alarms"],
+  "host_permissions": ["https://chatgpt.com/*", "https://claude.ai/*", "http://127.0.0.1:18080/*"],
+  "background": {"service_worker": "src/background/service-worker.js", "type": "module"},
+  "icons": {"16": "icons/icon-16.png", "48": "icons/icon-48.png", "128": "icons/icon-128.png"},
+  "action": {"default_popup": "src/popup/popup.html", "default_icon": {"16": "icons/icon-16.png", "48": "icons/icon-48.png", "128": "icons/icon-128.png"}},
+  "content_scripts": [
+    {"matches": ["https://chatgpt.com/*"], "js": ["src/content/capture-adapter.js", "src/content/blocker-main.js", "src/content/network-probe-main.js"], "run_at": "document_start", "world": "MAIN"},
+    {"matches": ["https://claude.ai/*"], "js": ["src/content/blocker-main.js", "src/content/claude-network-probe-main.js"], "run_at": "document_start", "world": "MAIN"},
+    {"matches": ["https://chatgpt.com/*"], "js": ["src/content/capture-adapter.js", "src/content/platform.js", "src/content/files.js", "src/content/policy-engine.js", "src/content/policy-messages.js", "src/content/observer.js", "src/content/blocker-bridge.js", "src/content/network-bridge.js"], "run_at": "document_start", "world": "ISOLATED"},
+    {"matches": ["https://claude.ai/*"], "js": ["src/content/platform.js", "src/content/files.js", "src/content/policy-engine.js", "src/content/policy-messages.js", "src/content/observer.js", "src/content/blocker-bridge.js"], "run_at": "document_start", "world": "ISOLATED"}
+  ]
 }

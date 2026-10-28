@@ -1,13 +1,17 @@
 """Browser endpoints for the company's internal employee session."""
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
-from backend.internal_auth import EmployeeInfo, change_password, login, logout, resolve_session
+from backend.internal_auth import (EmployeeInfo, SESSION_DURATION, change_password, login, logout,
+                                   resolve_session)
 
 router = APIRouter(prefix="/api/auth", tags=["internal-auth"])
 COOKIE_NAME = "harness_session"
 COOKIE_PATH = "/api"
+EXTENSION_ORIGIN = "chrome-extension://njcbfaglhfigplenmpaojjgdbcjcfbjh"
 
 
 class LoginBody(BaseModel):
@@ -33,6 +37,15 @@ async def current_employee(request: Request) -> EmployeeInfo:
     return employee
 
 
+async def extension_employee(request: Request) -> EmployeeInfo:
+    authorization = request.headers.get("Authorization", "")
+    scheme, _, token = authorization.partition(" ")
+    employee = await resolve_session(token.strip() if scheme.lower() == "bearer" else None)
+    if employee is None:
+        raise HTTPException(401, "Harness login required")
+    return employee
+
+
 @router.post("/login")
 async def login_route(body: LoginBody, request: Request, response: Response):
     _check_origin(request)
@@ -45,6 +58,52 @@ async def login_route(body: LoginBody, request: Request, response: Response):
         httponly=True, secure=True, samesite="lax",
     )
     return {"must_change_password": must_change_password}
+
+
+@router.post("/extension/login")
+async def extension_login_route(body: LoginBody, request: Request, response: Response):
+    response.headers["Cache-Control"] = "no-store"
+    if request.headers.get("Origin") != EXTENSION_ORIGIN:
+        raise HTTPException(403, "invalid extension origin")
+    result = await login(body.employee_code, body.password)
+    if result is None:
+        raise HTTPException(401, "invalid credentials")
+    token, must_change_password = result
+    if must_change_password:
+        await logout(token)
+        return {"must_change_password": True}
+    employee = await resolve_session(token)
+    return {
+        "access_token": token,
+        "expires_at": int((datetime.now(timezone.utc) + SESSION_DURATION).timestamp()),
+        "employee_code": employee.code,
+        "organization_code": employee.organization_code,
+        "department_code": employee.department_code,
+        "role": employee.role,
+        "must_change_password": must_change_password,
+    }
+
+
+@router.get("/extension/me")
+async def extension_me_route(response: Response, employee: EmployeeInfo = Depends(extension_employee)):
+    response.headers["Cache-Control"] = "no-store"
+    return {
+        "employee_code": employee.code,
+        "organization_code": employee.organization_code,
+        "department_code": employee.department_code,
+        "role": employee.role,
+        "can_govern": employee.can_govern or employee.role == "governance",
+        "must_change_password": employee.must_change_password,
+    }
+
+
+@router.post("/extension/logout", status_code=204)
+async def extension_logout_route(request: Request, response: Response):
+    response.headers["Cache-Control"] = "no-store"
+    authorization = request.headers.get("Authorization", "")
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() == "bearer" and token.strip():
+        await logout(token.strip())
 
 
 @router.get("/me")

@@ -4,6 +4,8 @@ import logging
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
@@ -15,6 +17,7 @@ from gateway.forwarder import forward
 from gateway.internal_auth import _check_origin, current_employee, router as internal_auth_router
 from gateway.oauth_connection import router as oauth_router
 from gateway.chat import router as chat_router, governance_router
+from backend.capture_app.integration import capture_app, clean_capture_store, initialize_capture_store
 from gateway.profile_learning import process_pending_profiles
 
 logging.basicConfig(
@@ -24,6 +27,18 @@ logging.basicConfig(
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    _app.state.capture_store_ready = False
+
+    async def initialize_capture_worker() -> None:
+        while not _app.state.capture_store_ready:
+            try:
+                await asyncio.to_thread(initialize_capture_store)
+                _app.state.capture_store_ready = True
+            except Exception:
+                logging.getLogger("governance_capture").exception(
+                    "capture store initialization failed; extension routes will return 503")
+                await asyncio.sleep(60)
+
     async def profile_worker() -> None:
         while True:
             try:
@@ -32,22 +47,52 @@ async def lifespan(_app: FastAPI):
                 logging.getLogger("profile_learning").exception("profile learning poll failed")
             await asyncio.sleep(15)
 
+    async def capture_retention_worker() -> None:
+        while True:
+            await asyncio.sleep(24 * 60 * 60)
+            if not _app.state.capture_store_ready:
+                continue
+            try:
+                await asyncio.to_thread(clean_capture_store)
+            except Exception:
+                logging.getLogger("governance_capture").exception("capture retention poll failed")
+
     task = asyncio.create_task(profile_worker(), name="profile-learning")
+    initialize_task = asyncio.create_task(initialize_capture_worker(), name="capture-initialization")
+    retention_task = asyncio.create_task(capture_retention_worker(), name="capture-retention")
     try:
         yield
     finally:
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+        for worker in (task, initialize_task, retention_task):
+            worker.cancel()
+            try:
+                await worker
+            except asyncio.CancelledError:
+                pass
 
 
 app = FastAPI(lifespan=lifespan)
+app.state.capture_store_ready = False
 app.include_router(internal_auth_router)
 app.include_router(oauth_router)
 app.include_router(chat_router)
 app.include_router(governance_router)
+app.mount("/api/capture", capture_app(), name="governance-capture")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["chrome-extension://njcbfaglhfigplenmpaojjgdbcjcfbjh"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Authorization", "Content-Type", "X-Machine-Id", "X-Machine-Timestamp",
+                   "X-Machine-Nonce", "X-Machine-Signature"],
+)
+
+
+@app.middleware("http")
+async def require_capture_store(request: Request, call_next):
+    if request.url.path.startswith("/api/capture/") and not app.state.capture_store_ready:
+        return JSONResponse(status_code=503, content={"detail": "Capture store unavailable"})
+    return await call_next(request)
 
 
 @app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])

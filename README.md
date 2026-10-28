@@ -4,6 +4,8 @@ Proxy FastAPI para o backend Codex, com OAuth por conta, chaves de cliente, limi
 
 O código está separado em `backend/`, `gateway/` e `frontend/`. O mapa atual e os limites ainda pendentes estão em [`docs/PROJECT_CONTEXT.md`](docs/PROJECT_CONTEXT.md).
 
+A extensão que captura conversas do ChatGPT e do Claude está em [`browser-extension/`](browser-extension/README.md); sua API roda integrada ao gateway.
+
 Para retomar o MVP em outra máquina, leia o [estado atual e roteiro de continuidade](docs/HANDOFF.md). O frontend completo está em [`frontend/public/`](frontend/public/) e seu funcionamento está descrito no [README do frontend](frontend/README.md).
 
 ## Banco local no Windows

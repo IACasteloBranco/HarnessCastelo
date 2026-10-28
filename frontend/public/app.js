@@ -1408,6 +1408,39 @@ function fillRows(id, rows, emptyMessage) {
   }
 }
 
+async function loadMachineRequests() {
+  try {
+    const result = await api("/api/capture/v1/admin/machines/assignment-requests");
+    if (state.screen !== "governance") return;
+    const rows = (result.items || []).map(item => {
+      const row = metadataRow(item.requested_employee_id,
+        `${item.department_code || "Sem departamento"} · ${item.installation_id} · fingerprint ${item.key_fingerprint}`);
+      if (item.can_approve) {
+        for (const [label, action] of [["Aprovar", "approve"], ["Rejeitar", "reject"]]) {
+          const button = document.createElement("button");
+          button.className = label === "Aprovar" ? "secondary-button" : "text-button";
+          button.type = "button";
+          button.textContent = label;
+          button.addEventListener("click", async () => {
+            button.disabled = true;
+            try {
+              await api(`/api/capture/v1/admin/machines/${encodeURIComponent(item.installation_id)}/assignment-request/${action}`,
+                { method: "POST" });
+              status(`Solicitação ${action === "approve" ? "aprovada" : "rejeitada"}.`);
+              await loadMachineRequests();
+            } catch (error) { status(error.message, true); button.disabled = false; }
+          });
+          row.append(button);
+        }
+      }
+      return row;
+    });
+    fillRows("machine-requests", rows, "Nenhuma solicitação pendente.");
+  } catch (error) {
+    if (state.screen === "governance") fillRows("machine-requests", [], error.message);
+  }
+}
+
 async function loadGovernance() {
   if (state.employee?.role !== "governance" && !state.employee?.can_govern) return;
   const start = $("report-start").value;
@@ -1423,12 +1456,14 @@ async function loadGovernance() {
     const usage = report.usage || [];
     const categories = report.findings || [];
     const totalRuns = usage.reduce((sum, row) => sum + row.runs, 0);
+    const chatgptUses = usage.reduce((sum, row) => sum + (row.chatgpt_interactions || 0), 0);
+    const claudeUses = usage.reduce((sum, row) => sum + (row.claude_interactions || 0), 0);
     const errors = usage.reduce((sum, row) => sum + row.errors, 0);
     const latencyTotal = usage.reduce((sum, row) => sum + row.latency_ms, 0);
     const samples = usage.reduce((sum, row) => sum + row.latency_samples, 0);
     const summary = $("report-summary");
     summary.replaceChildren();
-    for (const [label, value] of [["Runs", totalRuns], ["Erros", errors], ["Latência média", samples ? `${Math.round(latencyTotal / samples)} ms` : "—"], ["Achados", categories.reduce((sum, row) => sum + row.count, 0)]]) {
+    for (const [label, value] of [["Usos no Maximus", totalRuns], ["Usos no ChatGPT", chatgptUses], ["Usos no Claude", claudeUses], ["Erros no Maximus", errors], ["Latência média", samples ? `${Math.round(latencyTotal / samples)} ms` : "—"], ["Achados", categories.reduce((sum, row) => sum + row.count, 0)]]) {
       const card = document.createElement("div");
       const number = document.createElement("strong");
       number.textContent = value;
@@ -1439,21 +1474,27 @@ async function loadGovernance() {
     }
     const departments = new Map();
     for (const row of usage) {
-      const item = departments.get(row.department) || { runs: 0, errors: 0 };
+      const item = departments.get(row.department) || { runs: 0, chatgpt: 0, claude: 0, errors: 0 };
       item.runs += row.runs;
+      item.chatgpt += row.chatgpt_interactions || 0;
+      item.claude += row.claude_interactions || 0;
       item.errors += row.errors;
       departments.set(row.department, item);
     }
-    fillRows("usage-list", [...departments].map(([department, item]) => metadataRow(department, `${item.runs} runs · ${item.errors} erros`)), "Sem uso no período.");
+    fillRows("usage-list", [...departments].map(([department, item]) => metadataRow(department,
+      `${item.runs + item.chatgpt + item.claude} usos · Maximus ${item.runs} · ChatGPT ${item.chatgpt} · Claude ${item.claude} · ${item.errors} erros no Maximus`)), "Sem uso no período.");
     const byCategory = new Map();
     for (const row of categories) byCategory.set(row.category, (byCategory.get(row.category) || 0) + row.count);
     fillRows("categories-list", [...byCategory].map(([category, count]) => metadataRow(category, `${count} achados`)), "Sem achados no período.");
     renderGovernanceRuns(runs.runs || [], false);
     fillRows("governance-findings", (findings.findings || []).map(item => metadataRow(item.category, `${item.confidence} · ${new Date(item.created_at).toLocaleString("pt-BR")}`, item.run_id)), "Sem achados recentes.");
     fillRows("governance-alerts", (alerts.alerts || []).map(item => metadataRow(`Alerta · ${item.category}`, item.status, item.run_id)), "Sem alertas recentes.");
+    void loadMachineRequests();
     await loadKnowledgeDepartments();
   } catch (error) { if (state.screen === "governance") status(error.message, true); }
 }
+
+$("machine-requests-refresh").addEventListener("click", loadMachineRequests);
 
 async function loadKnowledgeDepartments() {
   const result = await api("/api/governance/knowledge/departments");

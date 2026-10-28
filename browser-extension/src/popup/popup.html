@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width">
+  <title>Governança de IA Castelo Branco Contabilidade</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main>
+    <header class="brand">
+      <img class="brand-mark" src="../../icons/icon-48.png" alt="" aria-hidden="true">
+      <div><p class="eyebrow">CASTELO BRANCO</p><h1>Governança de IA</h1></div>
+    </header>
+    <p class="intro">Captura prompts e respostas do ChatGPT e do Claude, além de metadados técnicos de streams e arquivos. Os registros ficam vinculados à instalação atribuída a um colaborador. Anexos enviados têm somente os metadados observados registrados, sem leitura do conteúdo do arquivo.</p>
+
+    <section id="privacy-notice" class="card privacy-notice" aria-labelledby="privacy-title">
+      <h2 id="privacy-title">Aviso de privacidade antes da captura — versão <span id="privacy-version"></span></h2>
+      <p>Uso interno obrigatório para colaboradores no Brasil. Antes de enviar conversas, a empresa orienta anonimizar dados de clientes e terceiros. A extensão registra prompts e respostas observados no ChatGPT e no Claude, horários, instalação, colaborador, departamento, contexto da conversa, IP de origem e metadados de anexos. Diagnósticos locais podem incluir resultados e códigos das regras da política. Não envia bytes dos arquivos nem cookies ou cabeçalhos de autenticação dos provedores.</p>
+      <p>A empresa calcula métricas mensais de uso individual e por departamento, avalia a qualidade do uso e estuda onde a IA participa das operações e pode melhorar. Para essas análises, a liderança e a chefia de IA podem ler conversas completas vinculadas ao colaborador. Os dados não serão usados para treinar modelos de IA. O backend fica no Google Cloud em São Paulo e a conexão usa Cloudflare Tunnel com Zero Trust e TLS.</p>
+      <p>A retenção definida para os registros é de 90 dias. Backups ainda não estão configurados; quando configurados, deverão seguir o mesmo prazo. A empresa orienta anonimizar as conversas antes de enviá-las à IA. Dúvidas ou pedidos: +55 75 9864-6173.</p>
+      <label id="privacy-ack-label" class="check" for="privacy-ack"><input id="privacy-ack" type="checkbox"> Confirmo que recebi e li este aviso.</label>
+      <button id="accept-privacy" type="button" disabled>Registrar ciência</button>
+      <p id="privacy-accepted" class="helper" hidden></p>
+      <p class="helper">A assinatura do termo da empresa continua obrigatória antes da coleta. Este registro de ciência não substitui o termo nem define a base legal do tratamento.</p>
+    </section>
+
+    <section id="cloud-login" class="card cloud-login" hidden aria-label="Acesso corporativo">
+      <p id="account">Sessão Harness não iniciada.</p>
+      <div id="login-fields">
+        <label for="employee-code">Código do colaborador<input id="employee-code" type="text" autocomplete="username" maxlength="128" required></label>
+        <label for="password">Senha do Harness<input id="password" type="password" autocomplete="current-password" maxlength="1024" required></label>
+      </div>
+      <div class="button-row">
+        <button id="login" type="button">Entrar no Harness</button>
+        <button id="logout" class="button-secondary" type="button">Sair</button>
+      </div>
+    </section>
+
+    <section class="card identity-card" aria-labelledby="identity-title">
+      <div class="section-heading"><span class="step">01</span><div><h2 id="identity-title">Esta instalação</h2><p>Identificação e vínculo do equipamento</p></div></div>
+      <pre id="identity">Carregando…</pre>
+      <button id="register-machine" class="button-secondary" type="button">Atualizar identificação</button>
+    </section>
+
+    <form id="assignment-request" class="card request-card">
+      <div class="section-heading"><span class="step gold">02</span><div><h2>Solicitar vínculo</h2><p>Envie seu código para aprovação</p></div></div>
+      <label for="employee-id">Código do colaborador<input id="employee-id" type="text" autocomplete="off" maxlength="128" required placeholder="Ex.: CB-1234"></label>
+      <button type="submit">Enviar solicitação <span aria-hidden="true">→</span></button>
+      <p class="helper">A captura só será liberada depois que o operador aprovar o pedido.</p>
+    </form>
+
+    <form id="config" class="card config-card">
+      <div class="section-heading"><span class="step">03</span><div><h2>Captura</h2><p>Ativação protegida pelo vínculo aprovado</p></div></div>
+      <label class="check" for="enabled"><input id="enabled" type="checkbox" disabled> Ativar captura</label>
+      <button type="submit">Salvar configuração</button>
+    </form>
+
+    <div class="utility-row"><button id="health" class="button-secondary" type="button">Testar API</button></div>
+    <p id="status" role="status" aria-live="polite"></p>
+
+    <section class="diagnostics" aria-labelledby="probe-title">
+      <div class="section-heading compact"><span class="pulse" aria-hidden="true"></span><div><h2 id="probe-title">Sonda na aba atual</h2><p id="probe-status">Verificando…</p></div></div>
+    </section>
+    <section class="data-section local-data" aria-labelledby="local-data-title">
+      <h2 id="local-data-title">Dados locais</h2>
+      <p class="helper">Remove deste perfil do Chrome o aceite, a chave da instalação, os vínculos, diagnósticos e resumos. Isso não apaga dados já enviados ao backend; para solicitar a exclusão deles, contate +55 75 9864-6173.</p>
+      <button id="delete-local-data" class="button-secondary" type="button">Apagar dados locais e reiniciar instalação</button>
+    </section>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>
