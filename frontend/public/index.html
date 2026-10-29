@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#102f4a">
   <title>Maximus AI | Castelo Branco</title>
-  <link rel="icon" href="/maximus-mark.svg" type="image/svg+xml">
+  <link rel="icon" href="/maximus-favicon.png" type="image/png" sizes="128x128">
   <link rel="stylesheet" href="/styles.css">
   <script src="/markdown-it.min.js" defer></script>
   <script src="/app.js" defer></script>
@@ -34,12 +34,15 @@
     <symbol id="icon-file-slides" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M12 18v3M8 21h8M7 9h10M7 13h7"/></symbol>
     <symbol id="icon-folder" viewBox="0 0 24 24"><path d="M3 6.5h7l2 2h9v10.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
     <symbol id="icon-close" viewBox="0 0 24 24"><path d="m5 5 14 14M19 5 5 19"/></symbol>
+    <symbol id="icon-shield-check" viewBox="0 0 24 24"><path d="M12 3 19 6v5c0 4.4-2.8 8-7 10-4.2-2-7-5.6-7-10V6z"/><path d="m8.5 12 2.2 2.2 4.8-5"/></symbol>
+    <symbol id="icon-chart-bars" viewBox="0 0 24 24"><path d="M4 20V11h4v9M10 20V5h4v15M16 20v-8h4v8M3 20h18"/></symbol>
+    <symbol id="icon-people" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20v-1a6 6 0 0 1 12 0v1zM16 5.5a3 3 0 0 1 0 5.8M18 14a4.5 4.5 0 0 1 3 4.2V20h-3"/></symbol>
   </svg>
   <a class="skip-link" href="#main">Ir para o conteúdo</a>
   <div class="shell">
     <aside class="rail" aria-label="Identidade visual">
       <div class="chat-sidebar">
-        <img class="chat-sidebar-logo" src="/maximus-logo-transparent.png" alt="Maximus, Inteligência Corporativa">
+        <img class="chat-sidebar-logo maximus-wordmark" src="/maximus-logo-lion-first.png" alt="Maximus, Inteligência Corporativa">
         <button id="chat-mobile-close" class="chat-mobile-close" type="button" aria-label="Fechar conversas"><svg class="ui-icon"><use href="#icon-close"/></svg></button>
         <button id="chat-new" class="chat-side-start" type="button"><svg class="ui-icon"><use href="#icon-plus"/></svg> Novo chat</button>
         <label class="chat-side-search" for="chat-search"><svg class="ui-icon"><use href="#icon-search"/></svg><input id="chat-search" type="search" maxlength="200" placeholder="Buscar conversas" autocomplete="off"></label>
@@ -50,8 +53,18 @@
           <button id="chat-side-user" class="chat-side-user" type="button" aria-expanded="false" aria-controls="chat-user-menu" aria-label="Abrir menu do perfil"><span class="chat-side-avatar" aria-hidden="true">CB</span><span class="chat-side-identity"><strong id="chat-sidebar-employee"></strong><small>Castelo Branco</small></span><svg class="ui-icon chat-side-chevron" aria-hidden="true"><use href="#icon-chevron-up"/></svg></button>
         </div>
       </div>
-      <div class="brand"><img class="company-logo" src="/castelo-branco.png" alt="Castelo Branco Contabilidade Avançada"></div>
-      <div class="login-product"><img src="/maximus-logo-transparent.png" alt="Maximus, Inteligência Corporativa"></div>
+      <div class="brand"><img class="company-logo" src="/castelo-branco.png" alt="Castelo Branco"></div>
+      <div class="login-brand"><img class="login-brand-logo" src="/maximus-logo-negative.png" alt="Maximus, Inteligência Corporativa"></div>
+      <img class="login-watermark" src="/maximus-login-watermark.png" alt="" aria-hidden="true">
+      <section class="login-intro" aria-label="Sobre o Maximus AI">
+        <h2>Inteligência na rotina da Castelo Branco.</h2>
+        <span class="login-intro-rule" aria-hidden="true"></span>
+        <ul class="login-benefits">
+          <li><svg class="ui-icon" aria-hidden="true"><use href="#icon-shield-check"/></svg><span>Mais segurança</span></li>
+          <li><svg class="ui-icon" aria-hidden="true"><use href="#icon-chart-bars"/></svg><span>Mais produtividade</span></li>
+          <li><svg class="ui-icon" aria-hidden="true"><use href="#icon-people"/></svg><span>De todos, para todos</span></li>
+        </ul>
+      </section>
       <div class="rail-center" aria-hidden="true"><span class="orbit orbit-one"></span><span class="orbit orbit-two"></span><span class="orbit-core"><img src="/castelo-lion.png" alt=""></span></div>
       <div class="rail-footer"><span class="rail-rule"></span><p>Seu espaço de trabalho, com acesso seguro e conexão sob seu controle.</p><small>Castelo Branco · Ambiente interno</small></div>
     </aside>
@@ -63,7 +76,6 @@
       <section id="loading-view" class="view narrow-view" aria-labelledby="loading-title"><span class="eyebrow">Castelo Branco</span><h1 id="loading-title" tabindex="-1">Preparando seu espaço</h1><p>Aguarde enquanto verificamos sua sessão.</p><span class="loading-bar" aria-hidden="true"></span></section>
 
       <section id="login-view" class="view narrow-view" aria-labelledby="login-title" hidden>
-        <div class="login-company" aria-label="Castelo Branco Contabilidade Avançada"><img src="/castelo-lion.png" alt=""><span><strong>CASTELO<br>BRANCO</strong><small>CONTABILIDADE AVANÇADA</small></span></div>
         <h1 id="login-title" tabindex="-1">Entrar na sua conta</h1><p class="lead">Acesse o Maximus AI com seu código de colaborador e sua senha.</p>
         <form id="login-form" class="form-card">
           <label for="employee-code">Código de colaborador</label><input id="employee-code" name="employee_code" autocomplete="username" placeholder="Seu código de acesso" maxlength="128" required>
@@ -118,6 +130,11 @@
         <form id="callback-form" class="form-card"><label for="callback-url">Endereço final da página</label><input id="callback-url" name="callback_url" type="url" inputmode="url" autocomplete="off" placeholder="Cole a URL completa aqui" maxlength="4096" required><p id="callback-error" class="field-error" role="alert" hidden></p><button class="primary-button" type="submit">Concluir conexão <span aria-hidden="true">↗</span></button></form>
       </section>
     </main>
+    <footer class="login-footer" aria-label="Assinatura institucional">
+      <div class="login-footer-brand"><span>Uma solução da</span><img src="/castelo-footer-logo.png" alt="Castelo Branco Contabilidade Avançada"></div>
+      <span class="login-footer-divider" aria-hidden="true"></span>
+      <p>Pessoas, tecnologia e contabilidade a favor do seu negócio.</p>
+    </footer>
   </div>
   <dialog id="project-dialog" class="project-dialog" aria-labelledby="project-dialog-title"><form id="project-form"><h2 id="project-dialog-title">Novo projeto</h2><label for="project-name">Nome do projeto</label><input id="project-name" maxlength="80" required><div class="project-dialog-actions"><button id="project-cancel" class="secondary-button" type="button">Cancelar</button><button class="primary-button" type="submit">Salvar</button></div></form></dialog>
   <dialog id="context-dialog" class="context-dialog" aria-labelledby="context-title"><div class="context-head"><div><h2 id="context-title">Contexto</h2><p>O que o Maximus sabe sobre você e como deve responder.</p></div><button id="context-close" class="text-button" type="button" aria-label="Fechar contexto">Fechar</button></div><label for="context-scope">Ver contexto de</label><select id="context-scope"><option value="profile">Meu perfil</option><option value="project">Projeto atual</option><option value="conversation">Conversa atual</option></select><form id="profile-form" hidden><label for="profile-text">Perfil do colaborador</label><p>O Maximus atualiza este texto quando você compartilha informações duráveis. Você pode corrigir ou apagar o conteúdo.</p><p id="profile-provenance" class="context-provenance" aria-live="polite"></p><a id="profile-origin" href="#" hidden></a><p id="profile-warning" class="field-error" role="alert" hidden>Este perfil contém texto que pode tentar alterar as regras do assistente. Ele não será incluído no contexto até você revisá-lo.</p><textarea id="profile-text" maxlength="3000" rows="7" placeholder="O perfil será formado ao longo das conversas."></textarea><p id="profile-error" class="field-error" role="alert" hidden></p><button class="secondary-button" type="submit">Salvar perfil</button></form><h3 id="context-list-label">Notas adicionais</h3><div id="context-list" class="context-list" aria-live="polite"></div><form id="context-form"><label for="context-kind">Tipo</label><select id="context-kind"><option value="instruction">Instrução</option><option value="memory">Memória</option></select><label for="context-content">Conteúdo</label><textarea id="context-content" maxlength="1000" rows="3" required placeholder="Ex.: Prefiro respostas objetivas."></textarea><p id="context-error" class="field-error" role="alert" hidden></p><div class="project-dialog-actions"><button id="context-cancel-edit" class="secondary-button" type="button" hidden>Cancelar edição</button><button class="primary-button" type="submit">Adicionar</button></div></form></dialog>

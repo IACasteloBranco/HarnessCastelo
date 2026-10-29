@@ -943,7 +943,31 @@ function renderChat() {
   if (pending && !runs.some(run => run.client_message_id === pending.id)) {
     transcript.append(chatBubble("user", pending.text, null, pending.fileCards || pending.attachments));
     const note = pending.phase === "sending" ? "Respondendo…" : pending.phase === "reconnect" ? "Aguardando reconexão" : pending.error || "Envio não confirmado";
-    transcript.append(chatBubble("assistant", pending.answer || "", note));
+    if (pending.phase === "sending" && !pending.answer) {
+      const bubble = chatBubble("assistant", "");
+      bubble.classList.add("chat-thinking-bubble");
+      const thinking = document.createElement("div");
+      thinking.className = "chat-thinking";
+      thinking.setAttribute("role", "status");
+      thinking.setAttribute("aria-live", "polite");
+      thinking.setAttribute("aria-label", "Maximus está pensando");
+      const lion = document.createElement("img");
+      lion.className = "chat-thinking-lion";
+      lion.src = "/maximus-lion-profile.png";
+      lion.alt = "";
+      lion.setAttribute("aria-hidden", "true");
+      const label = document.createElement("span");
+      label.textContent = "Maximus está pensando";
+      const dots = document.createElement("span");
+      dots.className = "chat-thinking-dots";
+      dots.setAttribute("aria-hidden", "true");
+      for (let index = 0; index < 3; index++) dots.append(document.createElement("i"));
+      thinking.append(lion, label, dots);
+      bubble.append(thinking);
+      transcript.append(bubble);
+    } else {
+      transcript.append(chatBubble("assistant", pending.answer || "", note));
+    }
   }
   $("chat-reconnect").hidden = pending?.phase !== "reconnect";
   if (pending?.phase === "reconnect") {
