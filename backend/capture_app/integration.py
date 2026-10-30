@@ -3,6 +3,7 @@
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 
+from .analytics import router as analytics_router
 from .db import clean_expired, initialize
 from .settings import get_settings
 
@@ -29,10 +30,17 @@ def capture_app() -> FastAPI:
     from .main import app as legacy_app
 
     embedded = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
-    embedded.router.routes.extend(
-        route for route in legacy_app.router.routes if isinstance(route, APIRoute)
-        and route.path in CAPTURE_PATHS
+    analytics_routes = tuple(
+        route for route in analytics_router.routes
+        if isinstance(route, APIRoute) and route.path in CAPTURE_PATHS
     )
+    analytics_keys = {(route.path, frozenset(route.methods or ())) for route in analytics_routes}
+    legacy_routes = tuple(
+        route for route in legacy_app.router.routes
+        if isinstance(route, APIRoute) and route.path in CAPTURE_PATHS
+        and (route.path, frozenset(route.methods or ())) not in analytics_keys
+    )
+    embedded.router.routes.extend((*legacy_routes, *analytics_routes))
     embedded.exception_handlers.update(legacy_app.exception_handlers)
     return embedded
 

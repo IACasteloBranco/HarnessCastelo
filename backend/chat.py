@@ -941,6 +941,7 @@ async def governance_run(actor_id: UUID, run_id: UUID, action: str = "read") -> 
                                      accessed_at=datetime.now(timezone.utc)))
         await session.flush()
         return {**_summary(run), "employee_id": run.employee_id,
+                "employee_code": author.code if author else None,
                 "request": run.request_json, "request_body": run.request_body,
                 "events": [{"ordinal": event.ordinal, "type": event.event_type,
                             "data": event.data} for event in events]}

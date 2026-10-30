@@ -17,7 +17,8 @@ with sync_playwright() as playwright:
                                          args=["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream"])
     for role, screenshot in [("collaborator", "maximus-chat-preview.png"), ("governance", "maximus-governance-preview.png")]:
         screenshot = str(Path(gettempdir()) / screenshot)
-        context = browser.new_context(viewport={"width": 1448, "height": 1086}, ignore_https_errors=True)
+        context = browser.new_context(viewport={"width": 1448, "height": 1086},
+                                      ignore_https_errors=True, timezone_id="America/Sao_Paulo")
         page = context.new_page()
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
@@ -83,8 +84,24 @@ with sync_playwright() as playwright:
                 return mock(route, {"findings": []})
             if path == "governance/alerts":
                 return mock(route, {"alerts": []})
+            if path.startswith("capture/v1/admin/analytics/interactions"):
+                return mock(route, {"items": [{"interaction_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                    "employee_id": "COLAB001", "person_name": "Colaborador de teste", "platform": "chatgpt_web",
+                    "status": "complete", "received_at": "2026-10-25T10:00:00Z"}], "total": 26,
+                    "limit": 25, "offset": 0})
+            if path.startswith("capture/v1/interactions/"):
+                return mock(route, {"interaction_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                    "employee_id": "COLAB001", "attributed_person": "Colaborador de teste",
+                    "platform": "chatgpt_web", "status": "complete", "received_at": "2026-10-25T10:00:00Z",
+                    "prompt": {"text": "Prompt sintético de teste"},
+                    "responses": [{"text": "Resposta sintética de teste"}]})
             if path.startswith("governance/runs/"):
-                return mock(route, {"run_id": "11111111-1111-4111-8111-111111111111", "request": {"input": [{"role": "user", "content": "teste"}]}})
+                return mock(route, {"run_id": "11111111-1111-4111-8111-111111111111",
+                                    "employee_code": "COLAB001", "started_at": "2026-10-25T10:00:00Z",
+                                    "prompt": "Como consultar o relatório?",
+                                    "response": {"output": [{"type": "message", "role": "assistant",
+                                        "content": [{"type": "output_text", "text": "Abra a tela de relatórios."}]}]},
+                                    "request": {"input": [{"role": "user", "content": "teste"}]}})
             return mock(route, {}, status=404)
 
         page.route("**/api/**", handle)
@@ -245,12 +262,108 @@ with sync_playwright() as playwright:
             page.locator("#governance-runs button").first.click()
             page.get_by_text("Esta leitura de conteúdo bruto foi registrada para auditoria.").wait_for()
             assert any(path.startswith("governance/runs/") for path in calls)
+            summary = page.locator("#run-detail-content").inner_text()
+            assert page.locator("#run-detail-content h3").all_text_contents() == [
+                "Quem fez", "Horário", "Prompt", "Resposta"]
+            values = page.locator("#run-detail-content p").all_text_contents()
+            assert values[0] == "COLAB001" and "/" in values[1]
+            assert values[2:] == ["Como consultar o relatório?", "Abra a tela de relatórios."]
+            assert not summary.lstrip().startswith("{")
+            page.get_by_role("button", name="Capturas", exact=True).click()
+            page.get_by_role("heading", name="Capturas da extensão").wait_for()
+            page.locator("#capture-employee").fill("COLAB001")
+            page.locator("#capture-platform").select_option("chatgpt_web")
+            page.locator("#capture-start").fill("2026-10-25")
+            page.locator("#capture-end").fill("2026-10-25")
+            page.locator("#capture-filter-form button[type=submit]").click()
+            page.get_by_text("Colaborador de teste", exact=True).wait_for()
+            query = next(call for call in reversed(calls) if call.startswith("capture/v1/admin/analytics/interactions?"))
+            assert "employee_id=COLAB001" in query and "platform=chatgpt_web" in query
+            expected_start, expected_end = page.evaluate("""() => [
+              new Date("2026-10-25T00:00:00").toISOString(),
+              new Date("2026-10-26T00:00:00").toISOString()
+            ]""")
+            assert f"from={expected_start.replace(':', '%3A')}" in query
+            assert f"to={expected_end.replace(':', '%3A')}" in query
+            page.get_by_role("button", name="Próxima").click()
+            page.get_by_text("26–26 de 26").wait_for()
+            assert any("offset=25" in call for call in calls if call.startswith("capture/v1/admin/analytics/interactions?"))
+            page.get_by_role("button", name="Abrir captura").click()
+            page.get_by_text("Prompt sintético de teste").wait_for()
+            page.get_by_text("Resposta sintética de teste").wait_for()
+            assert any(call.startswith("capture/v1/interactions/") for call in calls)
+            race_result = page.evaluate("""async () => {
+              const originalApi = api;
+              let releaseSlow;
+              api = async path => {
+                const employee = new URL(path, location.origin).searchParams.get("employee_id");
+                if (employee === "slow") return new Promise(resolve => { releaseSlow = resolve; });
+                return {items: [{interaction_id: "new", employee_id: "new", person_name: "Resultado novo",
+                  platform: "chatgpt_web", status: "complete", received_at: "2026-10-25T10:00:00Z"}], total: 1};
+              };
+              $("capture-employee").value = "slow";
+              captureOffset = 0;
+              const slow = loadCaptureInteractions();
+              $("capture-employee").value = "fast";
+              const fast = loadCaptureInteractions();
+              await fast;
+              releaseSlow({items: [{interaction_id: "old", employee_id: "old", person_name: "Resultado antigo",
+                platform: "chatgpt_web", status: "complete", received_at: "2026-10-25T10:00:00Z"}], total: 1});
+              await slow;
+              api = originalApi;
+              return $("capture-interactions").innerText;
+            }""")
+            assert "Resultado novo" in race_result and "Resultado antigo" not in race_result
+            page.locator("#capture-filter-form button[type=submit]").click()
+            assert not page.locator("#capture-detail").is_visible()
         page.screenshot(path=screenshot, full_page=True)
         page.set_viewport_size({"width": 390, "height": 844})
         page.screenshot(path=screenshot.replace(".png", "-mobile.png"), full_page=True)
         assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
         assert not errors, errors
         context.close()
+
+    context = browser.new_context(ignore_https_errors=True)
+    page = context.new_page()
+    page.add_init_script("window.open = () => null")
+    created_credentials = []
+
+    def add_credential_route(route):
+        request = route.request
+        path = request.url.split("/api/", 1)[1]
+        if path == "auth/me":
+            return mock(route, {"employee_code": "COLAB-000", "role": "governance", "can_govern": True,
+                                "must_change_password": False})
+        if path == "oauth/credentials":
+            if request.method == "POST":
+                credential_id = request.post_data_json["credential_id"]
+                created_credentials.append({"credential_id": credential_id, "connected": False, "can_connect": True})
+                return mock(route, created_credentials[-1], status=201)
+            return mock(route, created_credentials)
+        if path == "oauth/credentials/CONTA-EDUARDO/start":
+            return mock(route, {"connection_id": "22222222-2222-4222-8222-222222222222",
+                                "authorize_url": "https://example.com/authorize"})
+        if path.startswith("governance/reports/daily"):
+            return mock(route, {"usage": [], "findings": []})
+        if path in ("governance/findings", "governance/alerts"):
+            return mock(route, {path.rsplit("/", 1)[-1]: []})
+        if path == "capture/v1/admin/machines/assignment-requests":
+            return mock(route, {"items": []})
+        if path == "governance/knowledge/departments":
+            return mock(route, {"departments": []})
+        return mock(route, {}, status=404)
+
+    page.route("**/api/**", add_credential_route)
+    page.goto(BASE)
+    page.locator("#chat-sidebar-accounts").click()
+    page.get_by_role("heading", name="Suas contas").wait_for()
+    page.locator("#new-credential-id").fill("CONTA-EDUARDO")
+    page.locator("#add-credential-form button[type=submit]").click()
+    page.get_by_text("CONTA-EDUARDO", exact=True).wait_for()
+    assert created_credentials[0]["can_connect"]
+    page.get_by_role("button", name="Conectar conta").click()
+    page.get_by_role("heading", name="Conclua a conexão.").wait_for()
+    context.close()
 
     for connected_count in (0, 2):
         context = browser.new_context(ignore_https_errors=True)

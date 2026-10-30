@@ -37,6 +37,8 @@ class SharedOAuthTests(unittest.IsolatedAsyncioTestCase):
         self.third = f"employee-{uuid4().hex}"
         self.owner = f"owner-{uuid4().hex}"
         self.credential = f"cred-{uuid4().hex}"
+        self.ui_owner = None
+        self.ui_credential = None
         await provision_organization(self.org, "Example")
         await provision_department(self.org, self.dept, "Accounting")
         self.password = await provision_employee(self.org, self.first, "collaborator", self.dept)
@@ -54,6 +56,12 @@ class SharedOAuthTests(unittest.IsolatedAsyncioTestCase):
             await session.execute(delete(Run).where(Run.credential_id == self.credential))
             await session.execute(delete(OAuthConnectionIntent).where(OAuthConnectionIntent.credential_id == self.credential))
             await session.execute(delete(EmployeeCredential).where(EmployeeCredential.credential_id == self.credential))
+            if self.ui_credential:
+                await session.execute(delete(EmployeeCredential).where(
+                    EmployeeCredential.credential_id == self.ui_credential))
+                await session.execute(delete(CredentialRecord).where(
+                    CredentialRecord.credential_id == self.ui_credential))
+                await session.execute(delete(Account).where(Account.user_id == self.ui_owner))
             await session.execute(delete(InternalSession).where(InternalSession.employee_id.in_(employee_ids)))
             await session.execute(delete(Employee).where(Employee.organization_id == org_id))
             await session.execute(delete(CredentialRecord).where(CredentialRecord.credential_id == self.credential))
@@ -69,6 +77,46 @@ class SharedOAuthTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.post("/api/auth/change-password", json={
             "current_password": self.password, "new_password": "long new password 123"}, headers=headers)
         self.assertEqual(response.status_code, 200)
+
+    async def test_employee_can_create_own_oauth_credential_in_app(self):
+        credential_id = f"self-{uuid4().hex}"
+        self.ui_credential = credential_id
+        headers = {"Origin": "https://app.test"}
+        self.assertEqual((await self.client.post(
+            "/api/oauth/credentials", json={"credential_id": credential_id}, headers=headers
+        )).status_code, 401)
+        self.assertEqual((await self.client.post(
+            "/api/oauth/credentials", json={"credential_id": "invalid id"}, headers=headers
+        )).status_code, 401)
+
+        await self._login_ready()
+        invalid = await self.client.post(
+            "/api/oauth/credentials", json={"credential_id": "invalid id"}, headers=headers
+        )
+        self.assertEqual(invalid.status_code, 422)
+        async with session_factory()() as session:
+            employee_id = await session.scalar(select(Employee.id).where(Employee.code == self.first))
+        self.assertIsNotNone(employee_id)
+        self.ui_owner = f"employee-{employee_id.hex}"
+        response = await self.client.post(
+            "/api/oauth/credentials", json={"credential_id": credential_id}, headers=headers
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual(response.json(), {
+            "credential_id": credential_id, "connected": False, "can_connect": True,
+        })
+        credentials = await self.client.get("/api/oauth/credentials")
+        self.assertEqual(credentials.status_code, 200)
+        self.assertIn(credential_id, {item["credential_id"] for item in credentials.json()})
+        async with session_factory()() as session:
+            assigned_to = list(await session.scalars(select(EmployeeCredential.employee_id).where(
+                EmployeeCredential.credential_id == credential_id)))
+        self.assertEqual(assigned_to, [employee_id])
+
+        duplicate = await self.client.post(
+            "/api/oauth/credentials", json={"credential_id": credential_id}, headers=headers
+        )
+        self.assertEqual(duplicate.status_code, 409)
 
     async def test_connection_is_single_use_and_shared_quota_tracks_employee(self):
         await self._login_ready()

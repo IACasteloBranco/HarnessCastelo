@@ -733,6 +733,7 @@ class ChatTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(chat_run["duration_ms"], int)
         detail = await self.clients[2].get(f"/api/governance/runs/{first_run}")
         self.assertEqual(detail.status_code, 200)
+        self.assertEqual(detail.json()["employee_code"], self.first)
         self.assertEqual(detail.json()["request"]["input"][-1]["content"], "Olá")
         old_detail = await self.clients[2].get(f"/api/governance/runs/{legacy.run_id}")
         self.assertEqual(old_detail.status_code, 200)

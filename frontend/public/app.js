@@ -13,6 +13,10 @@ let audioRecorder = null;
 let audioStream = null;
 let recordingTimer = null;
 let profileDirty = false;
+let captureOffset = 0;
+let captureTotal = 0;
+let captureDetailId = null;
+let captureListVersion = 0;
 
 function confirmAction(title, message) {
   const dialog = $("confirm-dialog");
@@ -172,7 +176,7 @@ async function loadCredentials() {
     if (!credentials.length) {
       const empty = document.createElement("div");
       empty.className = "empty-state";
-      empty.textContent = "Nenhuma conta foi atribuída a você. Peça acesso ao responsável da Castelo Branco.";
+      empty.textContent = "Nenhuma conta cadastrada. Adicione sua conta Codex abaixo.";
       list.append(empty);
       return;
     }
@@ -276,6 +280,23 @@ $("logout-button").addEventListener("click", async () => {
 });
 
 $("refresh-button").addEventListener("click", loadCredentials);
+$("add-credential-form").addEventListener("submit", async event => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const credentialId = $("new-credential-id").value.trim();
+  formError("new-credential-error", "");
+  setBusy(form, true);
+  try {
+    await api("/api/oauth/credentials", {
+      method: "POST", body: JSON.stringify({ credential_id: credentialId }),
+    });
+    form.reset();
+    await loadCredentials();
+    status(`Conta ${credentialId} adicionada. Clique em Conectar conta para autorizar.`);
+  } catch (error) {
+    formError("new-credential-error", error.message);
+  } finally { setBusy(form, false); }
+});
 async function openChat() {
   show("chat");
   await Promise.all([loadCredentials(), loadProjects()]);
@@ -1470,13 +1491,125 @@ function selectGovernanceTab(tab) {
     void loadMachineRequests();
     void loadKnowledgeDepartments().catch(error => status(error.message, true));
   }
+  if (tab === "captures") void loadCaptureInteractions();
 }
 
-const governanceLabels = { sensitive_data: "Dados sensíveis", completed: "Concluído", failed: "Falhou", interrupted: "Interrompido", running: "Em andamento", sent: "Enviado", pending: "Pendente", review: "Em revisão", high: "Alta", medium: "Média", low: "Baixa" };
+const governanceLabels = { sensitive_data: "Dados sensíveis", completed: "Concluído", complete: "Concluída", incomplete: "Incompleta", failed: "Falhou", interrupted: "Interrompido", running: "Em andamento", sent: "Enviado", pending: "Pendente", review: "Em revisão", high: "Alta", medium: "Média", low: "Baixa" };
 function governanceLabel(value) { return governanceLabels[value] || String(value || "—").replaceAll("_", " "); }
 
 for (const button of document.querySelectorAll("[data-governance-tab]")) {
   button.addEventListener("click", () => selectGovernanceTab(button.dataset.governanceTab));
+}
+
+$("capture-filter-form").addEventListener("submit", event => {
+  event.preventDefault();
+  captureOffset = 0;
+  void loadCaptureInteractions();
+});
+$("capture-previous").addEventListener("click", () => {
+  captureOffset = Math.max(0, captureOffset - 25);
+  void loadCaptureInteractions();
+});
+$("capture-next").addEventListener("click", () => {
+  if (captureOffset + 25 < captureTotal) {
+    captureOffset += 25;
+    void loadCaptureInteractions();
+  }
+});
+$("capture-detail-close").addEventListener("click", () => {
+  clearCaptureDetail();
+});
+
+function clearCaptureDetail() {
+  captureDetailId = null;
+  $("capture-detail").hidden = true;
+  $("capture-detail-content").replaceChildren();
+}
+
+function captureDate(value) {
+  const timestamp = Date.parse(value || "");
+  return Number.isNaN(timestamp) ? "Horário desconhecido" : new Date(timestamp).toLocaleString("pt-BR");
+}
+
+async function loadCaptureInteractions() {
+  if ((state.employee?.role !== "governance" && !state.employee?.can_govern) || state.screen !== "governance") return;
+  const version = ++captureListVersion;
+  clearCaptureDetail();
+  const start = $("capture-start").value;
+  const end = $("capture-end").value;
+  if (start && end && start > end) {
+    captureTotal = 0;
+    fillRows("capture-interactions", [], "O período informado é inválido.");
+    $("capture-page").textContent = "0 resultados";
+    $("capture-previous").disabled = true;
+    $("capture-next").disabled = true;
+    return;
+  }
+  const params = new URLSearchParams({ limit: "25", offset: String(captureOffset) });
+  const employee = $("capture-employee").value.trim();
+  const platform = $("capture-platform").value;
+  if (employee) params.set("employee_id", employee);
+  if (platform) params.set("platform", platform);
+  if (start) params.set("from", new Date(`${start}T00:00:00`).toISOString());
+  if (end) {
+    const exclusiveEnd = new Date(`${end}T00:00:00`);
+    exclusiveEnd.setDate(exclusiveEnd.getDate() + 1);
+    params.set("to", exclusiveEnd.toISOString());
+  }
+  try {
+    const result = await api(`/api/capture/v1/admin/analytics/interactions?${params}`);
+    if (version !== captureListVersion || state.screen !== "governance") return;
+    captureTotal = result.total || 0;
+    const rows = (result.items || []).map(item => {
+      const platformLabel = item.platform === "chatgpt_web" ? "ChatGPT" : "Claude";
+      const row = metadataRow(item.person_name || item.employee_id,
+        `${item.employee_id} · ${platformLabel} · ${captureDate(item.received_at)} · ${governanceLabel(item.status)}`);
+      const button = document.createElement("button");
+      button.className = "text-button";
+      button.type = "button";
+      button.textContent = "Abrir captura";
+      button.addEventListener("click", () => openCaptureDetail(item.interaction_id));
+      row.append(button);
+      return row;
+    });
+    fillRows("capture-interactions", rows, "Nenhuma captura encontrada.");
+    $("capture-page").textContent = captureTotal
+      ? `${captureOffset + 1}–${captureOffset + rows.length} de ${captureTotal}` : "0 resultados";
+    $("capture-previous").disabled = captureOffset === 0;
+    $("capture-next").disabled = captureOffset + rows.length >= captureTotal;
+  } catch (error) {
+    if (version === captureListVersion && state.screen === "governance") fillRows("capture-interactions", [], error.message);
+  }
+}
+
+async function openCaptureDetail(interactionId) {
+  captureDetailId = interactionId;
+  $("capture-detail").hidden = false;
+  $("capture-detail-content").textContent = "Carregando captura…";
+  try {
+    const detail = await api(`/api/capture/v1/interactions/${encodeURIComponent(interactionId)}`);
+    if (captureDetailId !== interactionId || state.screen !== "governance") return;
+    const fields = [
+      ["Colaborador", detail.attributed_person || detail.employee_id || "Não atribuído"],
+      ["Plataforma", detail.platform === "chatgpt_web" ? "ChatGPT" : "Claude"],
+      ["Horário", captureDate(detail.received_at)],
+      ["Prompt", detail.prompt?.text || "Não capturado"],
+      ["Respostas", (detail.responses || []).map(item => item.text).filter(Boolean).join("\n\n") || "Nenhuma resposta capturada"],
+    ];
+    const content = $("capture-detail-content");
+    content.replaceChildren();
+    for (const [label, value] of fields) {
+      const section = document.createElement("section");
+      const heading = document.createElement("h3");
+      const text = document.createElement("p");
+      heading.textContent = label;
+      text.textContent = value;
+      section.append(heading, text);
+      content.append(section);
+    }
+  } catch (error) {
+    if (captureDetailId === interactionId) $("capture-detail-content").textContent = error.message;
+  }
 }
 
 async function loadMachineRequests() {
@@ -1678,6 +1811,27 @@ function renderGovernanceRuns(runs, append) {
   $("runs-more").dataset.before = runs.at(-1)?.run_id || "";
 }
 
+function renderRunDetail(detail) {
+  const startedAt = Date.parse(detail.started_at);
+  const fields = [
+    ["Quem fez", detail.employee_code || (detail.employee_id ? "Colaborador" : "API sem usuário interno")],
+    ["Horário", Number.isNaN(startedAt) ? "Não registrado" : new Date(startedAt).toLocaleString("pt-BR")],
+    ["Prompt", typeof detail.prompt === "string" && detail.prompt ? detail.prompt : "Não registrado"],
+    ["Resposta", assistantText(detail.response) || "Não registrada"],
+  ];
+  const content = $("run-detail-content");
+  content.replaceChildren();
+  for (const [label, value] of fields) {
+    const section = document.createElement("section");
+    const heading = document.createElement("h3");
+    const text = document.createElement("p");
+    heading.textContent = label;
+    text.textContent = value;
+    section.append(heading, text);
+    content.append(section);
+  }
+}
+
 async function openRunDetail(runId) {
   if (state.employee?.role !== "governance" && !state.employee?.can_govern) return;
   state.runDetailId = runId;
@@ -1688,7 +1842,7 @@ async function openRunDetail(runId) {
   if (window.innerWidth <= 900) $("run-detail").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth", block: "start" });
   try {
     const detail = await api(`/api/governance/runs/${encodeURIComponent(runId)}`);
-    if (state.runDetailId === runId && state.screen === "governance") $("run-detail-content").textContent = JSON.stringify(detail, null, 2);
+    if (state.runDetailId === runId && state.screen === "governance") renderRunDetail(detail);
   } catch (error) { if (state.runDetailId === runId) $("run-detail-content").textContent = error.message; }
 }
 

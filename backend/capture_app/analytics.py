@@ -1,6 +1,7 @@
 from collections import defaultdict
 from datetime import datetime, timezone
 import json
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
@@ -140,6 +141,7 @@ def search_interactions(
     response: Response,
     department_code: str | None = Query(default=None, min_length=1, max_length=128),
     employee_id: str | None = Query(default=None, min_length=1, max_length=128),
+    platform: Literal["chatgpt_web", "claude_web"] | None = Query(default=None),
     start: datetime | None = Query(default=None, alias="from"),
     end: datetime | None = Query(default=None, alias="to"),
     limit: int = Query(default=25, ge=1, le=100),
@@ -157,7 +159,8 @@ def search_interactions(
     if scoped_department:
         clauses.append("i.department_code = ?")
         values.append(scoped_department)
-    for column, value in (("i.department_code", department_code), ("i.employee_id", employee_id)):
+    for column, value in (("i.department_code", department_code), ("i.employee_id", employee_id),
+                          ("i.platform", platform)):
         if value is not None:
             clauses.append(f"{column} = ?")
             values.append(value)
@@ -173,9 +176,7 @@ def search_interactions(
             f"""SELECT i.interaction_id, i.employee_id,
                        COALESCE(i.attributed_person, e.person_name, 'Não atribuído') AS person_name,
                        i.department_code, COALESCE(d.department_name, i.department_code, 'Não atribuído') AS department_name,
-                       i.platform, i.status, i.received_at, i.prompt_json,
-                       (SELECT r.text FROM responses r WHERE r.interaction_id = i.interaction_id
-                        ORDER BY r.received_at DESC LIMIT 1) AS response_text
+                       i.platform, i.status, i.received_at
                 FROM interactions i
                 LEFT JOIN employees e ON e.employee_id = i.employee_id
                 LEFT JOIN departments d ON d.department_code = i.department_code
@@ -198,8 +199,6 @@ def search_interactions(
             "platform": row["platform"],
             "status": row["status"],
             "received_at": row["received_at"],
-            "prompt": json.loads(row["prompt_json"]),
-            "response": row["response_text"],
         } for row in rows],
         "total": total,
         "limit": limit,
