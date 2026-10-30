@@ -62,6 +62,7 @@ class Run(Base):
             name="ck_runs_outcome",
         ),
         Index("ix_runs_credential_started", "credential_id", "started_at"),
+        Index("ix_runs_started_outcome", "started_at", "outcome"),
         UniqueConstraint("employee_id", "client_message_id", name="uq_runs_employee_client_message"),
         ForeignKeyConstraint(["conversation_id", "employee_id"],
                              ["conversations.id", "conversations.employee_id"],
@@ -84,6 +85,7 @@ class Run(Base):
     chat_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     method: Mapped[str] = mapped_column(String(16), nullable=False)
     path: Mapped[str] = mapped_column(Text, nullable=False)
     model: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -226,6 +228,7 @@ class Conversation(Base):
     __tablename__ = "conversations"
     __table_args__ = (
         UniqueConstraint("id", "employee_id"),
+        Index("ix_conversations_employee_activity", "employee_id", "last_activity_at", "id"),
         ForeignKeyConstraint(["project_id", "employee_id"], ["projects.id", "projects.employee_id"],
                              name="fk_conversations_project_employee"),
     )
@@ -296,6 +299,7 @@ class PromptFinding(Base):
 
 class DailyUsage(Base):
     __tablename__ = "daily_usage"
+    __table_args__ = (Index("ix_daily_usage_expires_at", "expires_at"),)
 
     organization_code: Mapped[str] = mapped_column(String(64), primary_key=True)
     department_code: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -309,6 +313,7 @@ class DailyUsage(Base):
 
 class DailyFinding(Base):
     __tablename__ = "daily_findings"
+    __table_args__ = (Index("ix_daily_findings_expires_at", "expires_at"),)
 
     organization_code: Mapped[str] = mapped_column(String(64), primary_key=True)
     department_code: Mapped[str] = mapped_column(String(64), primary_key=True)

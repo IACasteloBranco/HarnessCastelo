@@ -12,7 +12,8 @@ from sqlalchemy.dialects.postgresql import insert
 from backend.database import (ChatArtifact, ChatAttachment, ContextNote, Conversation, Employee, GovernanceAccess, Project, Run,
                               RunEvent, session_factory)
 from backend.store import (AdmittedRun, ChatRun, RequestRecord,
-                           _fernet, _locked_employee_credential, _record_run)
+                           _fernet, _locked_employee_credential, _record_run,
+                           recover_abandoned_runs)
 
 
 class ChatConflict(Exception):
@@ -83,6 +84,11 @@ async def delete_project(employee_id: UUID, project_id: UUID) -> None:
             Project.id == project_id, Project.employee_id == employee_id).with_for_update())
         if project is None:
             raise HistoryNotFound
+        open_conversations = (await session.scalars(select(Run.conversation_id).join(
+            Conversation, Run.conversation_id == Conversation.id).where(
+            Conversation.project_id == project_id, Run.outcome == "open"))).all()
+        for open_conversation in set(open_conversations):
+            await recover_abandoned_runs(session, open_conversation)
         busy = await session.scalar(select(Run.id).join(
             Conversation, Run.conversation_id == Conversation.id).where(
             Conversation.project_id == project_id, Run.outcome == "open"))
@@ -104,6 +110,7 @@ async def move_conversation(employee_id: UUID, conversation_id: UUID,
         if project_id is not None and not await session.scalar(select(Project.id).where(
             Project.id == project_id, Project.employee_id == employee_id)):
             raise HistoryNotFound
+        await recover_abandoned_runs(session, conversation_id)
         if await session.scalar(select(Run.id).where(
             Run.conversation_id == conversation_id, Run.outcome == "open")):
             raise ChatConflict("conversation_busy")
@@ -505,6 +512,7 @@ async def admit_chat(employee_id: UUID, credential_id: str, client_message_id: U
                                         project_id=project_id, created_at=now, last_activity_at=now)
             session.add(conversation)
             await session.flush()
+        await recover_abandoned_runs(session, conversation.id)
         if await session.scalar(select(Run.id).where(
             Run.conversation_id == conversation.id, Run.outcome == "open")):
             raise ChatConflict("conversation_busy")
@@ -699,8 +707,9 @@ async def delete_conversation(employee_id: UUID, conversation_id: UUID) -> None:
         conversation = await _conversation(session, employee_id, conversation_id, lock=True)
         if conversation is None:
             raise HistoryNotFound
+        await recover_abandoned_runs(session, conversation_id)
         if await session.scalar(select(Run.id).where(
-                Run.conversation_id == conversation_id, Run.outcome == "open")):
+            Run.conversation_id == conversation_id, Run.outcome == "open")):
             raise ChatConflict("conversation_busy")
         await session.execute(delete(ContextNote).where(
             ContextNote.employee_id == employee_id, ContextNote.conversation_id == conversation_id))

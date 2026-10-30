@@ -7,10 +7,10 @@ from uuid import uuid4
 from cryptography.fernet import Fernet
 from sqlalchemy import select
 
-from backend.database import Run, _session_factory, session_factory
+from backend.database import Run, RunEvent, _session_factory, session_factory
 from backend.store import (
-    Credential, RequestRecord, TokenBundle, admit, create_credential,
-    issue_client_key, revoke_user, valid_access_token,
+    Credential, RequestRecord, StreamEvent, TokenBundle, admit, append_events,
+    create_credential, finish_transport, issue_client_key, revoke_user, valid_access_token,
 )
 
 
@@ -76,6 +76,25 @@ class TokenTests(unittest.IsolatedAsyncioTestCase):
         release.set()
         with self.assertRaises(PermissionError):
             await asyncio.wait_for(task, 3)
+
+    async def test_two_turn_usage_and_event_order(self):
+        user = f"test-{uuid4().hex}"
+        await create_credential(user, TokenBundle("test-token", None, time.time() + 3600))
+        key = await issue_client_key(user)
+        run_id = (await admit(key, RequestRecord("POST", "responses", b'{}'))).run_id
+        await append_events(run_id, [StreamEvent(0, "response.completed",
+            '{"response":{"output":[],"usage":{"input_tokens":2,"output_tokens":1}}}')], 200)
+        await append_events(run_id, [StreamEvent(1, "maximus.knowledge_result", "{}"),
+            StreamEvent(2, "response.completed",
+            '{"response":{"output":[],"usage":{"input_tokens":3,"output_tokens":4}}}')], 200)
+        await finish_transport(run_id, 200, "completed")
+        async with session_factory()() as session:
+            run = await session.get(Run, run_id)
+            events = (await session.scalars(select(RunEvent).where(
+                RunEvent.run_id == run_id).order_by(RunEvent.ordinal))).all()
+        self.assertEqual(run.usage_json, {"input_tokens": 5, "output_tokens": 5})
+        self.assertEqual(run.outcome, "completed")
+        self.assertEqual([event.ordinal for event in events], [0, 1, 2])
 
 
 if __name__ == "__main__":

@@ -29,6 +29,13 @@ class AdmittedRun:
     credential: Credential
 
 
+class RunClosed(Exception):
+    pass
+
+
+RUN_LEASE = timedelta(minutes=5)
+
+
 @dataclass(frozen=True)
 class TokenBundle:
     access: str
@@ -231,7 +238,8 @@ async def _record_run(session, credential: CredentialRecord, request: RequestRec
         client_message_id=chat.client_message_id if chat else None,
         chat_prompt=chat.text if chat else None,
         context_learning_status="pending" if chat else "done",
-        started_at=now, method=request.method, path=request.path,
+        started_at=now, lease_expires_at=now + RUN_LEASE,
+        method=request.method, path=request.path,
         model=payload.get("model") if isinstance(payload, dict) else None,
         request_body=body_text,
         request_json=stored_payload if isinstance(stored_payload, (dict, list)) else None,
@@ -449,13 +457,29 @@ async def import_legacy(entries: Sequence[LegacyCredential]) -> int:
     return imported
 
 
+def _sum_usage(previous: dict | None, current: dict) -> dict:
+    if previous is None:
+        return current
+    merged = dict(previous)
+    for key, value in current.items():
+        prior = merged.get(key)
+        if isinstance(prior, dict) and isinstance(value, dict):
+            merged[key] = _sum_usage(prior, value)
+        elif (isinstance(prior, (int, float)) and not isinstance(prior, bool)
+              and isinstance(value, (int, float)) and not isinstance(value, bool)):
+            merged[key] = prior + value
+        else:
+            merged[key] = value
+    return merged
+
+
 async def append_events(run_id: UUID, events: Sequence[StreamEvent], http_status: int) -> None:
     if not events:
         return
     async with session_factory()() as session, session.begin():
         run = await session.scalar(select(Run).where(Run.id == run_id).with_for_update())
         if not run or run.outcome != "open":
-            return
+            raise RunClosed
         run.http_status = http_status
         for event in events:
             session.add(
@@ -480,16 +504,9 @@ async def append_events(run_id: UUID, events: Sequence[StreamEvent], http_status
                     continue
                 if isinstance(response, dict):
                     run.response_json = response
-                    run.usage_json = response.get("usage")
-                run.outcome = {
-                    "response.completed": "completed",
-                    "response.failed": "failed",
-                    "response.incomplete": "incomplete",
-                    "error": "failed",
-                }[event.event_type]
-                if run.outcome != "completed":
-                    run.context_learning_status = "skipped"
-                run.finished_at = datetime.now(timezone.utc)
+                    usage = response.get("usage")
+                    if isinstance(usage, dict):
+                        run.usage_json = _sum_usage(run.usage_json, usage)
 
 
 async def finish_transport(
@@ -504,6 +521,35 @@ async def finish_transport(
             run.http_status = http_status
             run.outcome = outcome
             run.error_code = error_code
+            run.lease_expires_at = None
             if run.conversation_id is not None and (outcome != "completed" or run.response_json is None):
                 run.context_learning_status = "skipped"
             run.finished_at = datetime.now(timezone.utc)
+
+
+async def heartbeat_run(run_id: UUID) -> bool:
+    async with session_factory()() as session, session.begin():
+        run = await session.scalar(select(Run).where(Run.id == run_id).with_for_update())
+        now = datetime.now(timezone.utc)
+        if not run or run.outcome != "open" or not run.lease_expires_at or run.lease_expires_at <= now:
+            return False
+        run.lease_expires_at = now + RUN_LEASE
+        return True
+
+
+async def recover_abandoned_runs(session, conversation_id: UUID) -> int:
+    runs = (await session.scalars(select(Run).where(
+        Run.conversation_id == conversation_id, Run.outcome == "open").with_for_update())).all()
+    now = datetime.now(timezone.utc)
+    recovered = 0
+    for run in runs:
+        # A legacy NULL lease has no liveness evidence; leave it for manual review.
+        if run.lease_expires_at is None or run.lease_expires_at > now:
+            continue
+        run.outcome = "interrupted"
+        run.error_code = "abandoned_run"
+        run.finished_at = now
+        run.lease_expires_at = None
+        run.context_learning_status = "skipped"
+        recovered += 1
+    return recovered
