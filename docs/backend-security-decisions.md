@@ -1,0 +1,19 @@
+# Decisões de segurança pendentes no Maximus
+
+Este registro descreve políticas que precisam de aprovação antes de impor novas restrições. As correções técnicas de streaming, recuperação, cabeçalhos e revalidação da biblioteca não dependem delas.
+
+| Tema | Comportamento atual | Regra necessária e risco | Modificação recomendada | Aprovação |
+| --- | --- | --- | --- | --- |
+| Ciência de privacidade da extensão | A versão, o colaborador e a data ficam em `chrome.storage.local`; o service worker impede a captura sem esse registro. A ingestão do backend autentica a máquina, mas não recebe uma prova de ciência persistida no servidor. | Definir se a ciência é exigência para aceitar dados, sua versão vigente, quem pode revogá-la e como tratar máquinas offline. Sem essa regra, um cliente modificado pode enviar captura sem ciência verificável pelo servidor. | Persistir aceite versionado e vinculado ao colaborador no backend; verificar a versão na ingestão após definir o fluxo de migração e revogação. | Sim, antes de rejeitar capturas. |
+| Modelos de IA | O chat aceita qualquer `model` não vazio de até 255 caracteres e o repassa ao Codex. | Definir catálogo permitido por organização, custo, disponibilidade e política de retenção. Sem isso, o usuário pode selecionar um modelo fora do perfil de custo ou segurança pretendido. | Validar o modelo no servidor contra catálogo aprovado e manter o cliente sincronizado com esse catálogo. | Sim, antes de restringir modelos. |
+| Falha de auditoria | Os chunks continuam; o run recebe `incomplete` e um código que distingue falha transitória, integridade, erro de armazenamento ou erro genérico de captura. | Definir se o serviço deve interromper a geração (`fail-closed`) ou entregá-la com auditoria degradada (`fail-open`). O primeiro protege a trilha, mas pode interromper trabalho; o segundo preserva disponibilidade, mas perde eventos. | Criar configuração explícita de política, alerta operacional e resposta ao cliente para o modo escolhido. Não repetir a chamada ao Codex nem inserir eventos por retry cego. | Sim. O comportamento atual permanece até a decisão. |
+| Operações sensíveis | Rotas de governança usam papel ou `can_govern`; a biblioteca revalida o escopo antes da consulta. Autorização de máquina e OAuth têm verificações próprias. | Definir uma matriz de quem pode conceder governança, vincular credenciais, exportar conteúdo e gerir máquinas, incluindo segregação de funções e trilha de aprovação. Sem ela, verificações técnicas podem ser mais amplas que a política corporativa. | Aplicar a matriz aprovada nas rotas e registrar ação, ator e alvo sem segredos em logs operacionais. | Sim para novas restrições ou fluxos de aprovação. |
+
+Runs abertos criados antes da migração de lease têm `lease_expires_at` nulo. Não há prova suficiente de abandono para recuperá-los automaticamente; exigem revisão operacional antes de encerramento manual.
+
+## Direção preliminar para aprovação corporativa
+
+- **Auditoria:** favorecer interrupção controlada nas operações classificadas como sensíveis. Definir essa classificação, o momento da interrupção, a comunicação ao usuário e como tratar efeitos que o agente já executou. Cancelar o stream não reverte esses efeitos. O modo atual continua aberto com marcação `incomplete` até a aprovação.
+- **Privacidade:** registrar no servidor versão do aviso, colaborador e data; definir revogação, máquinas offline e migração dos aceites locais antes de exigir o registro na ingestão.
+- **Modelos:** manter catálogo configurável no backend, com regras por organização e sincronização com o cliente; aprovar os modelos e o comportamento de indisponibilidade antes de rejeitar solicitações.
+- **Permissões:** aprovar matriz por função, recurso e operação, com menor privilégio e trilha de concessões; aplicar depois nas rotas correspondentes.
