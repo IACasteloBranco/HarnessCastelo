@@ -10,6 +10,7 @@ async function refresh() {
   currentConfig = config;
   $('enabled').checked = config.enabled;
   $('enabled').disabled = !config.privacyNotice.accepted;
+  $('privacy-notice').hidden = config.privacyNotice.accepted;
   $('privacy-version').textContent = config.privacyNotice.version;
   $('privacy-ack').disabled = config.privacyNotice.accepted;
   $('privacy-ack-label').hidden = config.privacyNotice.accepted;
@@ -26,6 +27,7 @@ async function refresh() {
     ? `Sessão Harness: ${config.employeeCode}. Expira em ${new Date(config.expiresAt * 1000).toLocaleString('pt-BR')}.`
     : config.authProblem || (config.configured ? 'Entre com seu código e senha do Harness.' : 'URL do servidor Harness inválida.');
   const machineInfo = config.machineInfo;
+  $('assignment-request').hidden = Boolean(machineInfo?.requested_employee_id || machineInfo?.employee_id);
   $('identity').textContent = `Instalação: ${config.installationId}\nColaborador: ${machineInfo?.person_name || 'aguardando atribuição'}\nID: ${machineInfo?.employee_id || 'pendente'}\nPedido pendente: ${machineInfo?.requested_employee_id || 'nenhum'}\nDepartamento: ${machineInfo?.department_code || 'pendente'}\nFingerprint: ${machineInfo?.key_fingerprint || 'cadastre a instalação'}\nChave: ${machineInfo?.key_matches === false ? 'diverge do cadastro' : machineInfo?.key_matches ? 'conferida' : 'não verificada'}`;
   const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
   if (!tab?.id) { $('probe-status').textContent = 'Nenhuma aba ativa.'; return; }

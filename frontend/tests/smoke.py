@@ -78,7 +78,7 @@ with sync_playwright() as playwright:
             if path.startswith("governance/reports/daily"):
                 return mock(route, {"usage": [{"day": "2026-10-25", "department": "CONTABIL", "runs": 3, "errors": 1, "latency_ms": 3000, "latency_samples": 2}], "findings": [{"day": "2026-10-25", "department": "CONTABIL", "category": "sensitive_data", "count": 1}]})
             if path == "governance/runs":
-                return mock(route, {"runs": [{"run_id": "11111111-1111-4111-8111-111111111111", "outcome": "completed", "started_at": "2026-10-25T10:00:00Z"}]})
+                return mock(route, {"runs": [{"run_id": "11111111-1111-4111-8111-111111111111", "outcome": "completed", "started_at": "2026-10-25T10:00:00Z", "source": "Chat do Maximus", "duration_ms": 2400}]})
             if path == "governance/findings":
                 return mock(route, {"findings": []})
             if path == "governance/alerts":
@@ -126,7 +126,7 @@ with sync_playwright() as playwright:
             page.locator("#chat-text").fill("Olá")
             page.locator("#chat-form button[type=submit]").click()
             page.get_by_text("Resposta de teste").wait_for()
-            assert page.locator(".chat-bubble strong").count() == 0
+            assert page.locator(".chat-content strong").count() == 0
             assert page.locator(".chat-artifact-menu").count() == 0
             page.get_by_role("button", name="Visualizar maximus-teste.pdf").click()
             page.locator("#artifact-dialog").wait_for(state="visible")
@@ -238,8 +238,10 @@ with sync_playwright() as playwright:
             assert "📎" not in page.locator("#chat-transcript").inner_text()
         else:
             page.get_by_role("heading", name="Visão de uso").wait_for()
+            page.locator(".governance-breakdown summary").click()
             page.get_by_text("CONTABIL", exact=True).wait_for()
             assert not any(path.startswith("governance/runs/") for path in calls)
+            page.get_by_role("button", name="Atividade", exact=True).click()
             page.locator("#governance-runs button").first.click()
             page.get_by_text("Esta leitura de conteúdo bruto foi registrada para auditoria.").wait_for()
             assert any(path.startswith("governance/runs/") for path in calls)

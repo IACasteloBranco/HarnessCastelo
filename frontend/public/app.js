@@ -1,7 +1,7 @@
 "use strict";
 
 const views = Object.fromEntries(["loading", "login", "password", "home", "connect", "chat", "governance"].map(name => [name, document.getElementById(`${name}-view`)]));
-const state = { screen: "loading", employee: null, credentials: [], projects: [], connection: null, chat: { runs: [], pending: null, preview: null, busy: false, before: null, conversationId: null, projectId: null, title: null, conversations: [], search: "", listBefore: null }, runDetailId: null };
+const state = { screen: "loading", employee: null, credentials: [], projects: [], connection: null, chat: { runs: [], pending: null, preview: null, busy: false, before: null, conversationId: null, projectId: null, listProjectId: null, title: null, conversations: [], search: "", listBefore: null }, runDetailId: null };
 let sessionVersion = 0;
 let credentialsVersion = 0;
 let chatVersion = 0;
@@ -32,25 +32,26 @@ function setChatUserMenu(open) {
 
 function show(screen, focus = true) {
   const previous = state.screen;
+  const governanceLayout = screen === "governance" || (state.employee?.role === "governance" && ["home", "connect"].includes(screen));
   if (previous === "chat" && screen !== "chat") stopRecording(true);
   state.screen = screen;
   setChatUserMenu(false);
   document.querySelector(".shell").classList.toggle("login-shell", screen === "login");
-  document.querySelector(".shell").classList.toggle("workspace-shell", screen === "chat" || screen === "governance");
+  document.querySelector(".shell").classList.toggle("workspace-shell", screen === "chat" || governanceLayout);
   document.querySelector(".shell").classList.toggle("chat-shell", screen === "chat");
-  document.querySelector(".shell").classList.toggle("governance-shell", screen === "governance");
+  document.querySelector(".shell").classList.toggle("governance-shell", governanceLayout);
   for (const [name, view] of Object.entries(views)) view.hidden = name !== screen;
   $("workspace-nav").hidden = !state.employee || state.employee.must_change_password || screen === "login" || screen === "password";
-  $("chat-nav").hidden = state.employee?.role !== "collaborator";
-  $("accounts-nav").hidden = state.employee?.role !== "collaborator";
+  $("chat-nav").hidden = !["collaborator", "governance"].includes(state.employee?.role);
+  $("accounts-nav").hidden = !["collaborator", "governance"].includes(state.employee?.role);
   $("governance-nav").hidden = !(state.employee?.role === "governance" || state.employee?.can_govern);
-  $("chat-sidebar-chat").hidden = state.employee?.role !== "collaborator";
-  $("chat-sidebar-accounts").hidden = screen !== "governance" || state.employee?.role !== "collaborator";
+  $("chat-sidebar-chat").hidden = !["collaborator", "governance"].includes(state.employee?.role);
+  $("chat-sidebar-accounts").hidden = !governanceLayout;
   $("chat-sidebar-governance").hidden = !(state.employee?.role === "governance" || state.employee?.can_govern);
   $("chat-sidebar-chat").classList.toggle("chat-side-current", screen === "chat");
   $("chat-sidebar-chat").setAttribute("aria-current", screen === "chat" ? "page" : "false");
-  $("chat-sidebar-accounts").classList.toggle("chat-side-current", screen === "home");
-  $("chat-sidebar-accounts").setAttribute("aria-current", screen === "home" ? "page" : "false");
+  $("chat-sidebar-accounts").classList.toggle("chat-side-current", screen === "home" || screen === "connect");
+  $("chat-sidebar-accounts").setAttribute("aria-current", ["home", "connect"].includes(screen) ? "page" : "false");
   $("chat-sidebar-governance").classList.toggle("chat-side-current", screen === "governance");
   $("chat-sidebar-governance").setAttribute("aria-current", screen === "governance" ? "page" : "false");
   $("chat-menu-governance").hidden = !state.employee?.can_govern;
@@ -91,11 +92,12 @@ function clearSession() {
   state.credentials = [];
   state.projects = [];
   state.connection = null;
-  state.chat = { runs: [], pending: null, preview: null, busy: false, before: null, conversationId: null, projectId: null, title: null, conversations: [], search: "", listBefore: null };
+  state.chat = { runs: [], pending: null, preview: null, busy: false, before: null, conversationId: null, projectId: null, listProjectId: null, title: null, conversations: [], search: "", listBefore: null };
   state.runDetailId = null;
   $("run-detail-content").textContent = "";
   $("run-detail").hidden = true;
   $("chat-text").value = "";
+  resizeChatText();
   selectedFiles = [];
   $("chat-attachments").value = "";
   $("chat-add-menu").open = false;
@@ -274,8 +276,16 @@ $("logout-button").addEventListener("click", async () => {
 });
 
 $("refresh-button").addEventListener("click", loadCredentials);
-$("chat-nav").addEventListener("click", async () => { show("chat"); await loadProjects(); await loadChat(); await loadConversations(); });
-$("chat-sidebar-chat").addEventListener("click", async () => { show("chat"); await loadProjects(); await loadChat(); await loadConversations(); });
+async function openChat() {
+  show("chat");
+  await Promise.all([loadCredentials(), loadProjects()]);
+  await loadChat();
+  state.chat.listProjectId = state.chat.projectId;
+  renderProjects();
+  await loadConversations();
+}
+$("chat-nav").addEventListener("click", openChat);
+$("chat-sidebar-chat").addEventListener("click", openChat);
 $("accounts-nav").addEventListener("click", () => { show("home"); loadCredentials(); });
 $("chat-sidebar-accounts").addEventListener("click", () => { show("home"); loadCredentials(); });
 $("chat-header-accounts").addEventListener("click", () => $("accounts-nav").click());
@@ -289,22 +299,26 @@ document.addEventListener("click", event => {
 document.addEventListener("keydown", event => {
   if (event.key === "Escape" && !$("chat-user-menu").hidden) { setChatUserMenu(false); $("chat-side-user").focus(); }
   if (event.key === "Escape" && $("chat-add-menu").open) { $("chat-add-menu").open = false; $("chat-add-menu").querySelector("summary").focus(); }
+  if (event.key === "Escape" && document.querySelector(".chat-shell.mobile-conversations")) $("chat-mobile-close").click();
 });
 
 function renderProjects() {
   const list = $("chat-project-list");
   list.replaceChildren();
-  $("chat-project-general").classList.toggle("active", !state.chat.projectId);
-  $("chat-list-heading").textContent = state.projects.find(item => item.id === state.chat.projectId)?.name || "Recentes";
+  $("chat-project-general").classList.toggle("active", !state.chat.listProjectId);
+  $("chat-project-general").setAttribute("aria-current", !state.chat.listProjectId ? "true" : "false");
+  $("chat-list-heading").textContent = state.projects.find(item => item.id === state.chat.listProjectId)?.name || "Sem projeto";
+  $("chat-project-context").textContent = state.chat.listProjectId ? `Conversas de ${$("chat-list-heading").textContent}` : "Conversas sem projeto";
   for (const project of state.projects) {
     const row = document.createElement("div");
     row.className = "chat-project-row";
-    row.classList.toggle("active", project.id === state.chat.projectId);
+    row.classList.toggle("active", project.id === state.chat.listProjectId);
     const open = document.createElement("button");
     open.type = "button";
     open.className = "chat-project-open";
     open.innerHTML = '<svg class="ui-icon" aria-hidden="true"><use href="#icon-folder"/></svg>';
     open.append(document.createTextNode(project.name));
+    open.setAttribute("aria-current", project.id === state.chat.listProjectId ? "true" : "false");
     open.addEventListener("click", () => selectProject(project.id));
     const trigger = document.createElement("button");
     trigger.type = "button";
@@ -343,6 +357,7 @@ function renderProjects() {
       try {
         await api(`/api/chat/projects/${project.id}`, { method: "DELETE" });
         if (state.chat.projectId === project.id) state.chat.projectId = null;
+        if (state.chat.listProjectId === project.id) state.chat.listProjectId = null;
         await loadProjects();
         if (state.chat.conversationId) await loadChat();
         else renderChat();
@@ -364,22 +379,13 @@ async function loadProjects() {
 
 async function selectProject(projectId) {
   if (state.chat.busy) return;
-  if (state.chat.projectId === projectId && state.chat.conversationId) {
-    document.querySelector(".chat-shell")?.classList.remove("mobile-conversations");
-    return;
-  }
   $("status").hidden = true;
-  state.chat.projectId = projectId;
+  state.chat.listProjectId = projectId;
   state.chat.search = "";
   $("chat-search").value = "";
   state.chat.conversations = [];
-  $("chat-new").click();
-  const version = chatVersion;
   renderProjects();
   await loadConversations();
-  if (version === chatVersion && state.chat.projectId === projectId && state.chat.conversations.length) {
-    $("chat-conversations").querySelector(".chat-conversation-open")?.click();
-  }
 }
 
 function openProjectDialog(project = null) {
@@ -406,13 +412,13 @@ $("project-form").addEventListener("submit", async event => {
     $("project-dialog").close();
     await loadProjects();
     if (!projectId) selectProject(project.id);
-    else if (state.chat.projectId === projectId) renderChat();
+    else if (state.chat.listProjectId === projectId) renderProjects();
   } catch (error) { status(error.message, true); }
   finally { button.disabled = false; }
 });
 
 function contextTarget(scope) {
-  return scope === "project" ? state.chat.projectId :
+  return scope === "project" ? state.chat.listProjectId :
     scope === "conversation" ? state.chat.conversationId : null;
 }
 
@@ -426,10 +432,11 @@ function resetContextForm() {
 }
 
 function openContextDialog(scope = "profile") {
-  $("context-scope").querySelector('[value="project"]').disabled = !state.chat.projectId;
+  $("context-scope").querySelector('[value="project"]').disabled = !state.chat.listProjectId;
   $("context-scope").querySelector('[value="conversation"]').disabled = !state.chat.conversationId;
   $("context-scope").value = contextTarget(scope) ? scope : "profile";
   resetContextForm();
+  $("context-notes").open = scope !== "profile";
   profileDirty = false;
   $("context-dialog").showModal();
   loadContextNotes();
@@ -459,6 +466,7 @@ function profileOrigin(profile) {
     $("context-dialog").close();
     show("chat");
     await loadChat();
+    state.chat.listProjectId = state.chat.projectId;
     await loadConversations();
   };
 }
@@ -533,7 +541,7 @@ async function loadContextNotes() {
 }
 
 $("chat-context").addEventListener("click", () => openContextDialog(
-  state.chat.conversationId ? "conversation" : state.chat.projectId ? "project" : "profile"));
+  state.chat.conversationId ? "conversation" : state.chat.listProjectId ? "project" : "profile"));
 $("chat-menu-context").addEventListener("click", () => { setChatUserMenu(false); openContextDialog("profile"); });
 $("context-close").addEventListener("click", () => $("context-dialog").close());
 $("profile-text").addEventListener("input", () => { profileDirty = true; });
@@ -555,7 +563,7 @@ $("profile-form").addEventListener("submit", async event => {
   finally { button.disabled = false; }
 });
 $("context-cancel-edit").addEventListener("click", resetContextForm);
-$("context-scope").addEventListener("change", () => { resetContextForm(); loadContextNotes(); });
+$("context-scope").addEventListener("change", () => { resetContextForm(); $("context-notes").open = $("context-scope").value !== "profile"; loadContextNotes(); });
 $("context-form").addEventListener("submit", async event => {
   event.preventDefault();
   const content = $("context-content").value.trim();
@@ -581,6 +589,7 @@ $("chat-new").addEventListener("click", () => {
   if (state.chat.busy) return;
   chatVersion++;
   state.chat.conversationId = null;
+  state.chat.projectId = state.chat.listProjectId;
   state.chat.title = null;
   state.chat.runs = [];
   state.chat.before = null;
@@ -588,14 +597,20 @@ $("chat-new").addEventListener("click", () => {
   state.chat.preview = null;
   $("chat-more").hidden = true;
   document.querySelector(".chat-shell")?.classList.remove("mobile-conversations");
+  $("chat-mobile-list").setAttribute("aria-expanded", "false");
+  renderProjects();
   renderChat();
   $("chat-text").focus();
 });
 $("chat-mobile-list").addEventListener("click", () => {
   document.querySelector(".chat-shell")?.classList.toggle("mobile-conversations");
+  $("chat-mobile-list").setAttribute("aria-expanded", String(document.querySelector(".chat-shell")?.classList.contains("mobile-conversations")));
 });
+$("chat-mobile-new").addEventListener("click", () => $("chat-new").click());
+$("chat-mobile-scrim").addEventListener("click", () => $("chat-mobile-close").click());
 $("chat-mobile-close").addEventListener("click", () => {
   document.querySelector(".chat-shell")?.classList.remove("mobile-conversations");
+  $("chat-mobile-list").setAttribute("aria-expanded", "false");
   $("chat-mobile-list").focus();
 });
 let searchTimer;
@@ -699,10 +714,7 @@ async function enterWorkspace() {
     show("governance");
     await loadGovernance();
   } else {
-    show("chat");
-    await Promise.all([loadCredentials(), loadProjects()]);
-    await loadChat();
-    await loadConversations();
+    await openChat();
   }
 }
 
@@ -1010,11 +1022,15 @@ function renderConversationList() {
       if (state.chat.busy) return;
       state.chat.conversationId = conversation.id;
       state.chat.projectId = conversation.project_id || null;
+      state.chat.listProjectId = state.chat.projectId;
       state.chat.title = conversation.title;
       state.chat.preview = null;
       state.chat.pending = null;
       renderProjects();
       await loadChat();
+      if (!matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        $("chat-transcript").animate([{ opacity: .7 }, { opacity: 1 }], { duration: 180, easing: "ease-out" });
+      }
       while (conversation.match_run_id && state.chat.before &&
              !state.chat.runs.some(run => run.run_id === conversation.match_run_id)) {
         await loadChat(state.chat.before);
@@ -1023,6 +1039,7 @@ function renderConversationList() {
         $("chat-transcript").querySelector(`[data-run-id="${conversation.match_run_id}"][data-role="${conversation.match_role || "user"}"]`)?.scrollIntoView({ block: "center" });
       }
       document.querySelector(".chat-shell")?.classList.remove("mobile-conversations");
+      $("chat-mobile-list").setAttribute("aria-expanded", "false");
     });
     const trigger = document.createElement("button");
     trigger.type = "button";
@@ -1073,6 +1090,7 @@ function renderConversationList() {
           menu.hidePopover();
           if (state.chat.conversationId === conversation.id) {
             state.chat.projectId = project.id;
+            state.chat.listProjectId = project.id;
             renderProjects();
             await loadChat();
           }
@@ -1101,7 +1119,7 @@ function renderConversationList() {
 
 async function loadConversations(before = null) {
   const search = state.chat.search;
-  const projectId = state.chat.projectId;
+  const projectId = state.chat.listProjectId;
   try {
     const params = new URLSearchParams({ limit: "50" });
     if (search) params.set("q", search);
@@ -1109,7 +1127,7 @@ async function loadConversations(before = null) {
     else params.set("unassigned", "true");
     if (before) params.set("before", before);
     const result = await api(`/api/chat/conversations?${params}`);
-    if (state.screen !== "chat" || search !== state.chat.search || projectId !== state.chat.projectId) return;
+    if (state.screen !== "chat" || search !== state.chat.search || projectId !== state.chat.listProjectId) return;
     state.chat.conversations = before ? [...state.chat.conversations, ...result.conversations] : result.conversations;
     state.chat.listBefore = result.next_before;
     $("chat-list-more").hidden = !result.next_before;
@@ -1132,7 +1150,7 @@ async function loadChat(before = null) {
     if (!before) {
       state.chat.conversationId = result.conversation_id;
       state.chat.title = result.title;
-      if (result.conversation_id) { state.chat.projectId = result.project_id || null; renderProjects(); }
+      if (result.conversation_id) state.chat.projectId = result.project_id || null;
     }
     state.chat.runs = before ? [...state.chat.runs, ...result.runs] : result.runs;
     state.chat.before = result.runs.length === 50 ? result.runs.at(-1).run_id : null;
@@ -1268,6 +1286,7 @@ async function transcribeAudio(file) {
     if (!response.ok) throw new Error(typeof result.detail === "string" ? result.detail : "Não foi possível transcrever o áudio.");
     const input = $("chat-text");
     input.value = [input.value.trim(), result.text].filter(Boolean).join("\n");
+    resizeChatText();
     input.focus();
     audioStatus("Transcrição pronta. Revise o texto antes de enviar.");
   } catch (error) {
@@ -1376,6 +1395,7 @@ $("chat-form").addEventListener("submit", async event => {
     credentialId, conversationId: state.chat.conversationId, projectId: state.chat.projectId,
     answer: "", phase: "sending", retried: false };
   $("chat-text").value = "";
+  resizeChatText();
   selectedFiles = [];
   renderSelectedFiles();
   state.chat.busy = false;
@@ -1384,6 +1404,13 @@ $("chat-form").addEventListener("submit", async event => {
 $("chat-text").addEventListener("keydown", event => {
   if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); $("chat-form").requestSubmit(); }
 });
+function resizeChatText() {
+  const input = $("chat-text");
+  input.style.height = "auto";
+  input.style.height = `${Math.min(input.scrollHeight, 180)}px`;
+  input.style.overflowY = input.scrollHeight > 180 ? "auto" : "hidden";
+}
+$("chat-text").addEventListener("input", resizeChatText);
 $("chat-more").addEventListener("click", () => { if (state.chat.before) loadChat(state.chat.before); });
 $("chat-reconnect-button").addEventListener("click", () => {
   const pending = state.chat.pending;
@@ -1414,7 +1441,7 @@ function metadataRow(title, detail, runId) {
     const button = document.createElement("button");
     button.className = "text-button";
     button.type = "button";
-    button.textContent = "Ver run";
+    button.textContent = "Ver execução";
     button.addEventListener("click", () => openRunDetail(runId));
     row.append(button);
   }
@@ -1430,6 +1457,26 @@ function fillRows(id, rows, emptyMessage) {
     empty.textContent = emptyMessage;
     target.append(empty);
   }
+}
+
+function selectGovernanceTab(tab) {
+  for (const button of document.querySelectorAll("[data-governance-tab]")) {
+    button.setAttribute("aria-current", button.dataset.governanceTab === tab ? "page" : "false");
+  }
+  for (const area of document.querySelectorAll("[data-governance-area]")) {
+    area.hidden = area.dataset.governanceArea !== tab;
+  }
+  if (tab === "admin") {
+    void loadMachineRequests();
+    void loadKnowledgeDepartments().catch(error => status(error.message, true));
+  }
+}
+
+const governanceLabels = { sensitive_data: "Dados sensíveis", completed: "Concluído", failed: "Falhou", interrupted: "Interrompido", running: "Em andamento", sent: "Enviado", pending: "Pendente", review: "Em revisão", high: "Alta", medium: "Média", low: "Baixa" };
+function governanceLabel(value) { return governanceLabels[value] || String(value || "—").replaceAll("_", " "); }
+
+for (const button of document.querySelectorAll("[data-governance-tab]")) {
+  button.addEventListener("click", () => selectGovernanceTab(button.dataset.governanceTab));
 }
 
 async function loadMachineRequests() {
@@ -1485,17 +1532,47 @@ async function loadGovernance() {
     const errors = usage.reduce((sum, row) => sum + row.errors, 0);
     const latencyTotal = usage.reduce((sum, row) => sum + row.latency_ms, 0);
     const samples = usage.reduce((sum, row) => sum + row.latency_samples, 0);
+    const findingCount = categories.reduce((sum, row) => sum + row.count, 0);
+    const startDate = new Date(`${start}T12:00:00`);
+    const endDate = new Date(`${end}T12:00:00`);
+    const period = start.slice(0, 7) === end.slice(0, 7)
+      ? `${startDate.getDate()} a ${new Intl.DateTimeFormat("pt-BR", { day: "numeric", month: "long", year: "numeric" }).format(endDate)}`
+      : `${startDate.toLocaleDateString("pt-BR")} a ${endDate.toLocaleDateString("pt-BR")}`;
+    $("report-period-label").textContent = period;
+    document.querySelector(".governance-period").open = false;
     const summary = $("report-summary");
     summary.replaceChildren();
-    for (const [label, value] of [["Usos no Maximus", totalRuns], ["Usos no ChatGPT", chatgptUses], ["Usos no Claude", claudeUses], ["Erros no Maximus", errors], ["Latência média", samples ? `${Math.round(latencyTotal / samples)} ms` : "—"], ["Achados", categories.reduce((sum, row) => sum + row.count, 0)]]) {
+    for (const [label, value, detail, kind] of [["Usos no Maximus", totalRuns, "Atividade total no período", "maximus"], ["Achados", findingCount, "Ocorrências registradas no período", "attention"], ["Desempenho", samples ? `${(latencyTotal / samples / 1000).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} s` : "—", "Latência média das respostas", "performance"]]) {
       const card = document.createElement("div");
+      card.className = `report-summary-primary report-summary-${kind}`;
       const number = document.createElement("strong");
       number.textContent = value;
       const caption = document.createElement("span");
       caption.textContent = label;
-      card.append(number, caption);
+      const description = document.createElement("small");
+      description.textContent = detail;
+      card.append(caption, number, description);
       summary.append(card);
     }
+    $("findings-count").textContent = `${findingCount} ${findingCount === 1 ? "achado" : "achados"}`;
+    const channels = $("channels-summary");
+    channels.replaceChildren();
+    const channelMax = Math.max(totalRuns, chatgptUses, claudeUses, 1);
+    for (const [name, count] of [["Maximus", totalRuns], ["ChatGPT", chatgptUses], ["Claude", claudeUses]]) {
+      const row = document.createElement("div");
+      row.className = "governance-channel";
+      const label = document.createElement("span");
+      label.textContent = name;
+      const track = document.createElement("div");
+      const bar = document.createElement("span");
+      bar.style.width = `${Math.max(0, count) / channelMax * 100}%`;
+      track.append(bar);
+      const total = document.createElement("strong");
+      total.textContent = count;
+      row.append(label, track, total);
+      channels.append(row);
+    }
+    $("channels-errors").textContent = `${errors} ${errors === 1 ? "erro registrado" : "erros registrados"} no Maximus.`;
     const departments = new Map();
     for (const row of usage) {
       const item = departments.get(row.department) || { runs: 0, chatgpt: 0, claude: 0, errors: 0 };
@@ -1509,12 +1586,10 @@ async function loadGovernance() {
       `${item.runs + item.chatgpt + item.claude} usos · Maximus ${item.runs} · ChatGPT ${item.chatgpt} · Claude ${item.claude} · ${item.errors} erros no Maximus`)), "Sem uso no período.");
     const byCategory = new Map();
     for (const row of categories) byCategory.set(row.category, (byCategory.get(row.category) || 0) + row.count);
-    fillRows("categories-list", [...byCategory].map(([category, count]) => metadataRow(category, `${count} achados`)), "Sem achados no período.");
+    fillRows("categories-list", [...byCategory].map(([category, count]) => metadataRow(governanceLabel(category), `${count} achados`)), "Sem achados no período.");
     renderGovernanceRuns(runs.runs || [], false);
-    fillRows("governance-findings", (findings.findings || []).map(item => metadataRow(item.category, `${item.confidence} · ${new Date(item.created_at).toLocaleString("pt-BR")}`, item.run_id)), "Sem achados recentes.");
-    fillRows("governance-alerts", (alerts.alerts || []).map(item => metadataRow(`Alerta · ${item.category}`, item.status, item.run_id)), "Sem alertas recentes.");
-    void loadMachineRequests();
-    await loadKnowledgeDepartments();
+    fillRows("governance-findings", (findings.findings || []).map(item => metadataRow(governanceLabel(item.category), `${governanceLabel(item.confidence)} · ${new Date(item.created_at).toLocaleString("pt-BR")}`, item.run_id)), "Sem achados recentes.");
+    fillRows("governance-alerts", (alerts.alerts || []).map(item => metadataRow(`Alerta · ${governanceLabel(item.category)}`, governanceLabel(item.status), item.run_id)), "Sem alertas recentes.");
   } catch (error) { if (state.screen === "governance") status(error.message, true); }
 }
 
@@ -1583,7 +1658,21 @@ $("knowledge-upload").addEventListener("click", async () => {
 function renderGovernanceRuns(runs, append) {
   const target = $("governance-runs");
   if (!append) target.replaceChildren();
-  for (const run of runs) target.append(metadataRow(run.outcome || "Run", new Date(run.started_at).toLocaleString("pt-BR"), run.run_id));
+  for (const run of runs) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "governance-run-row";
+    row.dataset.runId = run.run_id;
+    row.setAttribute("aria-pressed", String(state.runDetailId === run.run_id));
+    const title = document.createElement("strong");
+    title.textContent = governanceLabel(run.outcome);
+    const meta = document.createElement("small");
+    const duration = run.duration_ms == null ? "Duração indisponível" : run.duration_ms < 1000 ? `${run.duration_ms} ms` : `${(run.duration_ms / 1000).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} s`;
+    meta.textContent = `${new Date(run.started_at).toLocaleString("pt-BR")} · ${run.source || "Origem indisponível"} · ${duration}`;
+    row.append(title, meta);
+    row.addEventListener("click", () => openRunDetail(run.run_id));
+    target.append(row);
+  }
   if (!target.children.length) fillRows("governance-runs", [], "Sem runs recentes.");
   $("runs-more").hidden = runs.length < 50;
   $("runs-more").dataset.before = runs.at(-1)?.run_id || "";
@@ -1592,9 +1681,11 @@ function renderGovernanceRuns(runs, append) {
 async function openRunDetail(runId) {
   if (state.employee?.role !== "governance" && !state.employee?.can_govern) return;
   state.runDetailId = runId;
+  for (const row of document.querySelectorAll(".governance-run-row")) row.setAttribute("aria-pressed", String(row.dataset.runId === runId));
+  $("run-detail-placeholder").hidden = true;
   $("run-detail").hidden = false;
   $("run-detail-content").textContent = "Carregando detalhe…";
-  $("run-detail").scrollIntoView({ behavior: "smooth", block: "start" });
+  if (window.innerWidth <= 900) $("run-detail").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth", block: "start" });
   try {
     const detail = await api(`/api/governance/runs/${encodeURIComponent(runId)}`);
     if (state.runDetailId === runId && state.screen === "governance") $("run-detail-content").textContent = JSON.stringify(detail, null, 2);
@@ -1629,7 +1720,7 @@ $("runs-more").addEventListener("click", async () => {
   try { const result = await api(`/api/governance/runs?before=${encodeURIComponent(before)}`); renderGovernanceRuns(result.runs || [], true); }
   catch (error) { status(error.message, true); }
 });
-$("run-detail-close").addEventListener("click", () => { state.runDetailId = null; $("run-detail-content").textContent = ""; $("run-detail").hidden = true; });
+$("run-detail-close").addEventListener("click", () => { state.runDetailId = null; $("run-detail-content").textContent = ""; $("run-detail").hidden = true; $("run-detail-placeholder").hidden = false; for (const row of document.querySelectorAll(".governance-run-row")) row.setAttribute("aria-pressed", "false"); });
 $("run-export").addEventListener("click", async () => {
   if (!state.runDetailId) return;
   try { await downloadJson(`/api/governance/runs/${encodeURIComponent(state.runDetailId)}/export`, `run-${state.runDetailId}.json`); }

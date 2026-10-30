@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Proposta visual | Governança Maximus</title>
+  <style>
+    :root { color-scheme: light; --navy:#102f4a; --navy-deep:#101f34; --gold:#c9a86b; --ink:#183248; --muted:#526579; --line:#dce3e8; --canvas:#faf9f6; font:16px/1.5 "Segoe UI",Arial,sans-serif; color:var(--ink); background:var(--canvas); }
+    * { box-sizing:border-box; }
+    body { margin:0; min-width:320px; }
+    button, input { font:inherit; }
+    button { cursor:pointer; }
+    :focus-visible { outline:3px solid #bc8131; outline-offset:3px; }
+    .mode { position:absolute; opacity:0; width:1px; height:1px; }
+    .app { display:grid; grid-template-columns:258px minmax(0,1fr); min-height:100dvh; }
+    .sidebar { display:flex; flex-direction:column; gap:24px; padding:18px 15px; background:var(--navy-deep); color:white; }
+    .logo { display:block; width:100%; max-width:228px; padding:6px; border-radius:5px; background:#f9f7f2; }
+    .side-link { display:block; padding:11px 14px; border-radius:9px; background:#203650; color:white; font-size:.9rem; font-weight:700; }
+    .side-user { margin-top:auto; padding:16px 10px 4px; border-top:1px solid #34465b; font-size:.85rem; }
+    .side-user small { display:block; color:#bac4d0; }
+    main { min-width:0; padding:34px clamp(22px,3.4vw,52px) 70px; }
+    .page { max-width:1240px; margin:auto; }
+    .prototype-note { display:inline-block; margin-bottom:25px; padding:6px 10px; border-radius:6px; background:#f2e9d8; color:#5e4825; font-size:.76rem; font-weight:700; }
+    .heading { display:flex; align-items:end; justify-content:space-between; gap:20px; margin-bottom:28px; }
+    .eyebrow { display:block; margin-bottom:5px; color:#244b68; font-size:.78rem; font-weight:800; letter-spacing:.06em; text-transform:uppercase; }
+    h1 { margin:0; color:var(--navy); font-size:clamp(2rem,3vw,2.8rem); line-height:1.13; letter-spacing:-.035em; }
+    .heading p { margin:8px 0 0; color:var(--muted); }
+    .period { padding:8px 13px; border:1px solid var(--line); border-radius:9px; background:white; color:var(--navy); font-size:.82rem; font-weight:700; white-space:nowrap; }
+    .tabs { display:flex; gap:7px; margin-bottom:27px; border-bottom:1px solid var(--line); }
+    .tabs label { display:inline-flex; align-items:center; min-height:45px; padding:8px 16px 10px; border-bottom:3px solid transparent; color:var(--muted); font-weight:700; cursor:pointer; }
+    #tab-overview:checked ~ .app label[for=tab-overview], #tab-activity:checked ~ .app label[for=tab-activity], #tab-admin:checked ~ .app label[for=tab-admin] { border-bottom-color:var(--gold); color:var(--navy); }
+    #tab-overview:focus-visible ~ .app label[for=tab-overview], #tab-activity:focus-visible ~ .app label[for=tab-activity], #tab-admin:focus-visible ~ .app label[for=tab-admin] { outline:3px solid #bc8131; outline-offset:2px; }
+    .panel { display:none; animation:appear 180ms ease-out; }
+    #tab-overview:checked ~ .app .overview, #tab-activity:checked ~ .app .activity, #tab-admin:checked ~ .app .admin { display:block; }
+    @keyframes appear { from { opacity:.4; } to { opacity:1; } }
+    .section-head { display:flex; align-items:center; justify-content:space-between; gap:18px; margin:0 0 14px; }
+    h2 { margin:0; color:var(--navy); font-size:1.12rem; }
+    .section-head p { margin:3px 0 0; color:var(--muted); font-size:.84rem; }
+    .text-link { border:0; padding:8px 0; color:#244b68; background:none; font-size:.83rem; font-weight:700; }
+    .focus-grid { display:grid; grid-template-columns:1.2fr 1fr 1fr; gap:14px; margin-bottom:29px; }
+    .metric { min-height:145px; padding:19px 21px; border:1px solid var(--line); border-radius:15px; background:white; box-shadow:0 3px 12px #102f4a08; }
+    .metric.primary { background:var(--navy); color:white; border-color:var(--navy); }
+    .metric.attention { border-color:#dfc9a3; background:#fffaf2; }
+    .metric .label { color:var(--muted); font-size:.82rem; font-weight:700; }
+    .metric.primary .label { color:#d6e0e9; }
+    .metric strong { display:block; margin:10px 0 3px; font-size:2.3rem; line-height:1; letter-spacing:-.04em; color:var(--navy); }
+    .metric.primary strong { color:white; }
+    .metric small { color:var(--muted); font-size:.75rem; }
+    .metric.primary small { color:#d6e0e9; }
+    .content-grid { display:grid; grid-template-columns:minmax(0,1.35fr) minmax(270px,1fr); gap:16px; }
+    .card { min-width:0; padding:21px; border:1px solid var(--line); border-radius:15px; background:white; box-shadow:0 3px 12px #102f4a08; }
+    .card + .card { margin-top:16px; }
+    .content-grid .card + .card { margin-top:0; }
+    .row { display:flex; align-items:center; justify-content:space-between; gap:15px; padding:14px 0; border-bottom:1px solid #e9edf0; }
+    .row:last-child { border:0; padding-bottom:0; }
+    .row strong, .row small { display:block; }
+    .row strong { color:var(--navy); font-size:.9rem; }
+    .row small { color:var(--muted); font-size:.79rem; }
+    .badge { display:inline-block; padding:5px 9px; border-radius:99px; background:#f4e7ce; color:#694d1c; font-size:.73rem; font-weight:800; white-space:nowrap; }
+    .badge.success { background:#e7f1ea; color:#24543a; }
+    .quiet { color:var(--muted); font-size:.84rem; }
+    .channel { display:grid; grid-template-columns:68px 1fr 24px; align-items:center; gap:10px; margin-top:15px; color:var(--muted); font-size:.8rem; }
+    .channel div { height:9px; border-radius:99px; background:#edf1f3; overflow:hidden; }
+    .channel div span { display:block; width:var(--value); height:100%; border-radius:inherit; background:var(--gold); }
+    .channel strong { color:var(--navy); text-align:right; }
+    .activity-list .row { align-items:flex-start; }
+    .activity .content-grid { align-items:start; }
+    .activity-list .row > div:first-child { min-width:0; }
+    .activity-list .row strong { margin-bottom:4px; }
+    .activity-list .row small { overflow-wrap:anywhere; }
+    .activity-list .row button { min-height:44px; padding:8px 12px; border:1px solid var(--line); border-radius:8px; background:white; color:var(--navy); font-size:.82rem; font-weight:700; }
+    .activity-list .selected { margin:-8px -10px 0; padding:16px 10px; border-radius:9px; background:#f1f5f8; }
+    .detail-card dl { display:grid; grid-template-columns:90px 1fr; gap:10px; margin:18px 0; font-size:.83rem; }
+    .detail-card dt { color:var(--muted); }
+    .detail-card dd { margin:0; color:var(--navy); font-weight:700; overflow-wrap:anywhere; }
+    .detail-card p { color:var(--muted); font-size:.83rem; }
+    .admin-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
+    .admin-grid .card { min-height:250px; }
+    .admin-grid p { max-width:44ch; color:var(--muted); font-size:.88rem; }
+    .admin-action { min-height:44px; margin-top:15px; padding:9px 13px; border:1px solid var(--navy); border-radius:8px; background:var(--navy); color:white; font-size:.85rem; font-weight:700; }
+    .admin-status { margin-top:22px; padding:13px; border:1px dashed var(--line); border-radius:8px; color:var(--muted); font-size:.82rem; }
+    @media (max-width:900px) { .app { grid-template-columns:1fr; } .sidebar { flex-direction:row; align-items:center; gap:14px; padding:10px 18px; } .logo { width:180px; } .side-user { margin:0 0 0 auto; padding:0; border:0; } .side-user small { display:none; } main { padding:26px 20px 55px; } }
+    @media (max-width:650px) { .sidebar { padding:9px 13px; } .logo { width:132px; } .side-link { font-size:.75rem; padding:8px; } .side-user { display:none; } .heading { display:block; } .period { display:inline-block; margin-top:17px; } .tabs { justify-content:space-between; } .tabs label { padding-inline:4px; font-size:.81rem; } .focus-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .metric.primary { grid-column:1/-1; } .metric { min-height:123px; padding:15px; } .metric strong { font-size:1.9rem; } .content-grid,.admin-grid { grid-template-columns:1fr; } .content-grid .card + .card { margin-top:0; } .row { align-items:flex-start; } }
+    @media (prefers-reduced-motion:reduce) { .panel { animation:none; } }
+  </style>
+</head>
+<body>
+  <input class="mode" type="radio" name="tab" id="tab-overview" checked>
+  <input class="mode" type="radio" name="tab" id="tab-activity">
+  <input class="mode" type="radio" name="tab" id="tab-admin">
+  <div class="app">
+    <aside class="sidebar"><img class="logo" src="../frontend/public/maximus-logo-lion-first.png" alt="Maximus, Inteligência Corporativa"><span class="side-link">Governança</span><div class="side-user">Equipe de governança<small>Castelo Branco</small></div></aside>
+    <main><div class="page">
+      <span class="prototype-note">Proposta visual estática · dados ilustrativos</span>
+      <div class="heading"><div><span class="eyebrow">Governança de IA</span><h1>Visão de uso</h1><p>O que aconteceu, onde agir e como o uso evoluiu.</p></div><span class="period">10 a 30 de outubro de 2026</span></div>
+      <nav class="tabs" aria-label="Áreas da governança"><label for="tab-overview">Visão geral</label><label for="tab-activity">Atividade</label><label for="tab-admin">Administração</label></nav>
+      <section class="panel overview" aria-label="Visão geral">
+        <div class="section-head"><div><h2>Panorama do período</h2><p>Os números principais aparecem primeiro.</p></div><button class="text-link" type="button">Exportar relatório</button></div>
+        <div class="focus-grid"><div class="metric primary"><span class="label">Usos no Maximus</span><strong>12</strong><small>Atividade total no período</small></div><div class="metric attention"><span class="label">Achados</span><strong>2</strong><small>Ocorrências registradas no período</small></div><div class="metric"><span class="label">Desempenho</span><strong>1,8 s</strong><small>Latência média das respostas</small></div></div>
+        <div class="content-grid"><div class="card"><div class="section-head"><div><h2>Achados recentes</h2><p>Ocorrências para avaliação.</p></div><span class="badge">2 achados</span></div><div class="row"><div><strong>Dados sensíveis</strong><small>Categoria registrada no período.</small></div><span class="badge">Revisão</span></div><div class="row"><div><strong>Alertas enviados</strong><small>Notificações registradas para acompanhamento.</small></div><strong>1</strong></div></div><div class="card"><div class="section-head"><div><h2>Uso por canal</h2><p>Comparação do período.</p></div></div><div class="channel"><span>Maximus</span><div><span style="--value:100%"></span></div><strong>12</strong></div><div class="channel"><span>ChatGPT</span><div><span style="--value:0%"></span></div><strong>0</strong></div><div class="channel"><span>Claude</span><div><span style="--value:0%"></span></div><strong>0</strong></div><p class="quiet">1 erro registrado no Maximus.</p></div></div>
+      </section>
+      <section class="panel activity" aria-label="Atividade"><div class="section-head"><div><h2>Runs recentes</h2><p>Uma linha por execução. O conteúdo bruto abre somente após seleção.</p></div></div><div class="content-grid"><div class="card activity-list"><div class="row selected"><div><strong>Execução em 25 out, 10h</strong><small>ID 11111111-1111-4111-8111-111111111111</small></div><span class="badge success">Concluído</span></div><div class="row"><div><strong>Outras execuções</strong><small>A lista mantém status, horário e identificador para auditoria.</small></div><span class="quiet">Carregar mais</span></div></div><aside class="card detail-card"><span class="eyebrow">Execução selecionada</span><h2>Detalhes do run</h2><dl><dt>Resultado</dt><dd>Concluído</dd><dt>Início</dt><dd>25 out, 10h</dd><dt>ID</dt><dd>11111111-1111-4111-8111-111111111111</dd></dl><p>A abertura do conteúdo bruto continua registrada para auditoria.</p><button class="admin-action" type="button">Ver conteúdo bruto</button></aside></div></section>
+      <section class="panel admin" aria-label="Administração"><div class="admin-grid"><div class="card"><span class="eyebrow">Captura protegida</span><h2>Vínculos da extensão</h2><p>Aprove ou rejeite pedidos de vínculo antes de liberar a captura.</p><div class="admin-status">Nenhuma solicitação pendente.</div><button class="admin-action" type="button">Ver solicitações</button></div><div class="card"><span class="eyebrow">Conhecimento interno</span><h2>Biblioteca por departamento</h2><p>Gerencie documentos acessíveis apenas ao departamento escolhido.</p><div class="admin-status">CONTABIL · Nenhum documento indexado.</div><button class="admin-action" type="button">Gerenciar documentos</button></div></div></section>
+    </div></main>
+  </div>
+</body>
+</html>

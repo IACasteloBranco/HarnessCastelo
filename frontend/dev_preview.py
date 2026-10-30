@@ -30,6 +30,8 @@ SAMPLE_RUN = {
     "run_id": SAMPLE_RUN_ID,
     "outcome": "completed",
     "started_at": "2026-10-25T10:00:00Z",
+    "source": "Chat do Maximus",
+    "duration_ms": 2400,
     "prompt": "Como consultar o relatório mensal?",
     "response": {"output": [{"type": "message", "role": "assistant", "content": [
         {"type": "output_text", "text": "Esta é uma resposta simulada para a prévia da interface."}
@@ -75,7 +77,7 @@ class PreviewHandler(SimpleHTTPRequestHandler):
         if not session:
             self._json(HTTPStatus.UNAUTHORIZED, {"detail": "authentication required"})
             return None
-        if role and session["role"] != role:
+        if role and session["role"] != role and not (role == "collaborator" and session["role"] == "governance"):
             self._json(HTTPStatus.FORBIDDEN, {"detail": "account unavailable"})
             return None
         return session
@@ -98,7 +100,7 @@ class PreviewHandler(SimpleHTTPRequestHandler):
         if path == "/api/auth/me":
             session = self._authorized()
             if session:
-                self._json(HTTPStatus.OK, {"employee_code": session["code"], "role": session["role"], "must_change_password": False})
+                self._json(HTTPStatus.OK, {"employee_code": session["code"], "role": session["role"], "can_govern": session["role"] == "governance", "must_change_password": False})
             return
         if path == "/api/oauth/credentials":
             if self._authorized("collaborator"):
@@ -215,6 +217,10 @@ class PreviewHandler(SimpleHTTPRequestHandler):
                 run = next((item for item in RUNS.get(session["code"], []) if item["run_id"] == path.rsplit("/", 1)[-1] and item.get("conversation_id") in active), None)
                 self._json(HTTPStatus.OK if run else HTTPStatus.NOT_FOUND, run or {"detail": "run not found"})
             return
+        if path == "/api/capture/v1/admin/machines/assignment-requests":
+            if self._authorized("governance"):
+                self._json(HTTPStatus.OK, {"items": []})
+            return
         if path.startswith("/api/governance/"):
             if not self._authorized("governance"):
                 return
@@ -231,6 +237,10 @@ class PreviewHandler(SimpleHTTPRequestHandler):
                 self._json(HTTPStatus.OK, {"findings": [{"finding_id": str(uuid4()), "run_id": SAMPLE_RUN_ID, "category": "sensitive_data", "confidence": "review", "created_at": datetime.now(timezone.utc).isoformat()}]})
             elif path == "/api/governance/alerts":
                 self._json(HTTPStatus.OK, {"alerts": [{"alert_id": str(uuid4()), "run_id": SAMPLE_RUN_ID, "category": "sensitive_data", "status": "sent"}]})
+            elif path == "/api/governance/knowledge/departments":
+                self._json(HTTPStatus.OK, {"departments": [{"id": "dept-demo", "code": "CONTABIL", "name": "Contabilidade"}]})
+            elif path == "/api/governance/knowledge/departments/dept-demo/documents":
+                self._json(HTTPStatus.OK, {"documents": []})
             else:
                 self._json(HTTPStatus.NOT_FOUND, {"detail": "not found"})
             return
