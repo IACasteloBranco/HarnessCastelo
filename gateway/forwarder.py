@@ -84,8 +84,7 @@ async def forward(request: Request, path: str, admitted: AdmittedRun, body: byte
 
     headers = {
         key.lower(): value for key, value in request.headers.items()
-        if (key.lower() in ("accept", "content-type") if browser_session else
-            key.lower() not in ("host", "authorization", "content-length"))
+        if key.lower() in ("accept", "content-type")
     }
     if path.startswith("responses") and isinstance(payload, dict):
         headers["content-type"] = "application/json"

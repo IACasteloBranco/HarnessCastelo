@@ -213,36 +213,40 @@ async def search_department(employee_id: UUID, query: str) -> dict:
         if (employee is None or employee.disabled or employee.must_change_password
                 or employee.role != "collaborator" or employee.department_id is None):
             raise KnowledgeForbidden
-        organization_id = employee.organization_id
-        department_id = employee.department_id
     try:
         vector = (await asyncio.to_thread(_embed, [query]))[0]
     except Exception as exc:
         raise KnowledgeUnavailable("O modelo local de embeddings não está disponível.") from exc
-    async with session_factory()() as session:
+    async with session_factory()() as session, session.begin():
+        # Hold the employee row while selecting and decrypting passages so a transfer waits.
+        current = await session.scalar(select(Employee).where(
+            Employee.id == employee_id).with_for_update(read=True))
+        if (current is None or current.disabled or current.must_change_password
+                or current.role != "collaborator" or current.department_id is None):
+            raise KnowledgeForbidden
         rows = (await session.execute(
             select(DepartmentDocument, DepartmentDocumentChunk,
                    DepartmentDocumentChunk.embedding.cosine_distance(vector).label("distance"))
             .join(DepartmentDocumentChunk,
                   DepartmentDocumentChunk.document_id == DepartmentDocument.id)
-            .where(DepartmentDocument.organization_id == organization_id,
-                   DepartmentDocument.department_id == department_id)
+            .where(DepartmentDocument.organization_id == current.organization_id,
+                   DepartmentDocument.department_id == current.department_id)
             .order_by(DepartmentDocumentChunk.embedding.cosine_distance(vector))
             .limit(5)
         )).all()
-    sources = []
-    passages = []
-    for index, (document, chunk, distance) in enumerate(rows, 1):
-        if distance > 0.65:
-            continue
-        try:
-            text = _fernet().decrypt(chunk.text_ciphertext).decode("utf-8")
-        except Exception:
-            continue
-        source = {"id": f"F{index}", "document_id": str(document.id),
-                  "title": document.name, "page": chunk.page_number,
-                  "url": f"/api/chat/knowledge/documents/{document.id}/download"}
-        sources.append(source)
-        passages.append({"source": source["id"], "text": text})
-    output = json.dumps({"sources": sources, "passages": passages}, ensure_ascii=False)
-    return {"output": output, "sources": sources}
+        sources = []
+        passages = []
+        for index, (document, chunk, distance) in enumerate(rows, 1):
+            if distance > 0.65:
+                continue
+            try:
+                text = _fernet().decrypt(chunk.text_ciphertext).decode("utf-8")
+            except Exception:
+                continue
+            source = {"id": f"F{index}", "document_id": str(document.id),
+                      "title": document.name, "page": chunk.page_number,
+                      "url": f"/api/chat/knowledge/documents/{document.id}/download"}
+            sources.append(source)
+            passages.append({"source": source["id"], "text": text})
+        output = json.dumps({"sources": sources, "passages": passages}, ensure_ascii=False)
+        return {"output": output, "sources": sources}

@@ -307,6 +307,38 @@ class ProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("origin", seen[0])
         self.assertNotIn("referer", seen[0])
 
+    async def test_legacy_proxy_forwards_only_upstream_contract_headers(self):
+        seen = []
+
+        def upstream(request):
+            seen.append(request.headers)
+            return httpx.Response(200, content=b"ok")
+
+        with patch("gateway.forwarder.get_valid_token", return_value="oauth"), patch(
+            "gateway.forwarder.httpx.AsyncClient",
+            side_effect=lambda **kwargs: AsyncClient(transport=httpx.MockTransport(upstream)),
+        ), patch("gateway.forwarder.append_events"), patch("gateway.forwarder.finish_transport"):
+            request = Request({"type": "http", "method": "POST", "path": "/v1/models",
+                               "query_string": b"", "headers": [
+                                   (b"authorization", b"Bearer client-key"),
+                                   (b"accept", b"text/event-stream"),
+                                   (b"content-type", b"application/json"),
+                                   (b"cookie", b"harness_session=secret"),
+                                   (b"x-forwarded-host", b"attacker.test"),
+                                   (b"connection", b"close"),
+                                   (b"x-unknown", b"untrusted"),
+                               ]})
+            response = await forward(request, "models", AdmittedRun(
+                uuid4(), Credential("c", "u", "personal_oauth", 60, 500)), b"{}")
+            self.assertEqual(b"".join([part async for part in response.body_iterator]), b"ok")
+
+        self.assertEqual(seen[0]["authorization"], "Bearer oauth")
+        self.assertEqual(seen[0]["accept"], "text/event-stream")
+        self.assertEqual(seen[0]["content-type"], "application/json")
+        for name in ("cookie", "x-forwarded-host", "x-unknown"):
+            self.assertNotIn(name, seen[0])
+        self.assertNotEqual(seen[0].get("connection"), "close")
+
 
 if __name__ == "__main__":
     unittest.main()
