@@ -15,11 +15,12 @@ from cryptography.fernet import Fernet
 from openpyxl import load_workbook
 from sqlalchemy import delete, event, select
 
-from backend.database import (Account, AlertOutbox, ChatArtifact, ChatAttachment, ClientKey, ContextNote, Conversation, CredentialRecord, DailyFinding, DailyUsage, Department, Project,
+from backend.database import (Account, AlertOutbox, ChatArtifact, ChatAttachment, ClientKey, ContextNote, Conversation, CredentialRecord, DailyFinding, DailyUsage, Department, DepartmentDocument, Project,
                               Employee, EmployeeCredential, GovernanceAccess, PromptFinding,
                               InternalSession, Organization, Run, RunEvent, _session_factory,
                               session_factory)
 from backend.internal_auth import EmployeeInfo, provision_department, provision_employee, provision_organization
+from backend.knowledge import KnowledgeForbidden, search_department, upload_document
 from backend.chat import (CHAT_CAPABILITIES, ChatConflict, admit_chat, claim_context_source,
                           release_context_source, save_generated_profile)
 from backend.artifacts import build_artifact, preview_table
@@ -27,7 +28,9 @@ from backend.governance import (ClaimedAlert, SMTPConfig, _claim_due, _finish_al
                                 _send_email, current_prompt, deliver_due, scan_prompt)
 from backend.shared_oauth import assign_credential, create_shared_credential
 from backend.retention import retain_daily, retain_once
-from backend.store import RequestRecord, TokenBundle, _encode_tokens, admit, issue_client_key
+from backend.store import (RequestRecord, RunClosed, StreamEvent, TokenBundle,
+                           _encode_tokens, admit, append_events, finish_transport, heartbeat_run, issue_client_key,
+                           recover_abandoned_runs)
 from gateway.main import app
 from gateway.chat import router as chat_router
 from gateway.internal_auth import current_employee
@@ -81,7 +84,7 @@ class TranscriptionRouteTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual((await client.post("/api/chat/transcriptions", content=audio, headers={**ORIGIN, "X-Audio-Filename": "recado.txt"})).status_code, 422)
                 self.assertEqual((await client.post("/api/chat/transcriptions", content=b"", headers=headers)).status_code, 422)
                 employee = EmployeeInfo(uuid4(), "GOV", "ORG", None, "governance", False, True)
-                self.assertEqual((await client.post("/api/chat/transcriptions", content=audio, headers=headers)).status_code, 403)
+                self.assertEqual((await client.post("/api/chat/transcriptions", content=audio, headers=headers)).status_code, 200)
 
 
 class AttachmentPreviewTests(unittest.IsolatedAsyncioTestCase):
@@ -166,6 +169,7 @@ class ChatTests(unittest.IsolatedAsyncioTestCase):
             await session.execute(delete(EmployeeCredential).where(
                 EmployeeCredential.credential_id == self.credential))
             await session.execute(delete(InternalSession).where(InternalSession.employee_id.in_(employee_ids)))
+            await session.execute(delete(DepartmentDocument).where(DepartmentDocument.organization_id == org_id))
             await session.execute(delete(Employee).where(Employee.organization_id == org_id))
             await session.execute(delete(CredentialRecord).where(CredentialRecord.credential_id == self.credential))
             await session.execute(delete(Account).where(Account.user_id == self.owner))
@@ -175,6 +179,135 @@ class ChatTests(unittest.IsolatedAsyncioTestCase):
     def _body(self, text, message_id=None):
         return {"client_message_id": str(message_id or uuid4()), "credential_id": self.credential,
                 "model": "test-model", "text": text}
+
+    async def test_governance_account_can_chat_with_own_history(self):
+        await assign_credential(self.credential, self.gov)
+        requests = []
+
+        def upstream(request):
+            requests.append(json.loads(request.content))
+            response = {"response": {"output": [{"type": "message", "role": "assistant",
+                "content": [{"type": "output_text", "text": "Resposta da governança"}]}]}}
+            return httpx.Response(200, headers={"content-type": "text/event-stream"},
+                content=f"event: response.completed\ndata: {json.dumps(response)}\n\n".encode())
+
+        sent = await self._send(self.clients[2], self._body("Olá"), upstream)
+        self.assertEqual(sent.status_code, 200)
+        self.assertEqual([tool["name"] for tool in requests[0]["tools"]], ["create_artifact"])
+        run_id = sent.headers["x-run-id"]
+        own_history = (await self.clients[2].get("/api/chat/history")).json()
+        self.assertEqual(own_history["runs"][0]["prompt"], "Olá")
+        self.assertEqual((await self.clients[0].get(f"/api/chat/runs/{run_id}")).status_code, 404)
+        self.assertEqual((await self.clients[2].get(f"/api/chat/runs/{run_id}")).status_code, 200)
+
+    async def test_abandoned_run_recovery_is_idempotent_and_fenced(self):
+        async with session_factory()() as session:
+            employee_id = await session.scalar(select(Employee.id).where(Employee.code == self.first))
+        first, conversation_id, _ = await admit_chat(
+            employee_id, self.credential, uuid4(), "test-model", "first")
+        self.assertTrue(await heartbeat_run(first.run_id))
+        async with session_factory()() as session, session.begin():
+            run = await session.get(Run, first.run_id)
+            run.lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        async with session_factory()() as session, session.begin():
+            self.assertEqual(await recover_abandoned_runs(session, conversation_id), 1)
+            self.assertEqual(await recover_abandoned_runs(session, conversation_id), 0)
+        self.assertFalse(await heartbeat_run(first.run_id))
+        with self.assertRaises(RunClosed):
+            await append_events(first.run_id, [StreamEvent(0, "response.completed", "{}")], 200)
+        await finish_transport(first.run_id, 200, "completed")
+        second, _, _ = await admit_chat(employee_id, self.credential, uuid4(),
+                                        "test-model", "second", conversation_id)
+        async with session_factory()() as session:
+            first_run = await session.get(Run, first.run_id)
+            second_run = await session.get(Run, second.run_id)
+        self.assertEqual(first_run.outcome, "interrupted")
+        self.assertEqual(first_run.error_code, "abandoned_run")
+        self.assertEqual(second_run.outcome, "open")
+        await finish_transport(second.run_id, 200, "completed")
+
+    async def test_recovery_and_normal_finalization_cannot_both_win(self):
+        async with session_factory()() as session:
+            employee_id = await session.scalar(select(Employee.id).where(Employee.code == self.first))
+        admitted, conversation_id, _ = await admit_chat(
+            employee_id, self.credential, uuid4(), "test-model", "first")
+        async with session_factory()() as session, session.begin():
+            run = await session.get(Run, admitted.run_id)
+            run.lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+
+        async def recover():
+            async with session_factory()() as session, session.begin():
+                return await recover_abandoned_runs(session, conversation_id)
+
+        await asyncio.gather(recover(), finish_transport(admitted.run_id, 200, "completed"))
+        async with session_factory()() as session:
+            run = await session.get(Run, admitted.run_id)
+        self.assertIn(run.outcome, ("interrupted", "completed"))
+        self.assertIsNotNone(run.finished_at)
+
+    async def test_knowledge_search_uses_current_department_after_embedding(self):
+        other_code = f"other-{uuid4().hex}"
+        await provision_department(self.org, other_code, "Other")
+        async with session_factory()() as session:
+            employee = await session.scalar(select(Employee).where(Employee.code == self.first))
+            department = await session.scalar(select(Department).where(Department.code == self.dept))
+            other = await session.scalar(select(Department).where(Department.code == other_code))
+            manager_id = await session.scalar(select(Employee.id).where(Employee.code == self.gov))
+            employee_id = employee.id
+        vector = [1.0] + [0.0] * 383
+        with patch("backend.knowledge._embed", return_value=[vector]):
+            await upload_document(manager_id, department.id, "first.txt", b"first private document")
+            await upload_document(manager_id, other.id, "other.txt", b"other private document")
+            normal = await search_department(employee_id, "document")
+        self.assertEqual([source["title"] for source in normal["sources"]], ["first.txt"])
+
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def embed_after_change(_fn, _texts):
+            started.set()
+            await release.wait()
+            return [vector]
+
+        with patch("backend.knowledge.asyncio.to_thread", side_effect=embed_after_change):
+            task = asyncio.create_task(search_department(employee_id, "document"))
+            await asyncio.wait_for(started.wait(), 2)
+            async with session_factory()() as session, session.begin():
+                employee = await session.get(Employee, employee_id)
+                employee.department_id = other.id
+            release.set()
+            transferred = await asyncio.wait_for(task, 3)
+        self.assertEqual([source["title"] for source in transferred["sources"]], ["other.txt"])
+
+        started = asyncio.Event()
+        release = asyncio.Event()
+        with patch("backend.knowledge.asyncio.to_thread", side_effect=embed_after_change):
+            task = asyncio.create_task(search_department(employee_id, "document"))
+            await asyncio.wait_for(started.wait(), 2)
+            async with session_factory()() as session, session.begin():
+                employee = await session.get(Employee, employee_id)
+                employee.disabled = True
+            release.set()
+            with self.assertRaises(KnowledgeForbidden):
+                await asyncio.wait_for(task, 3)
+
+    async def test_capture_failure_is_persisted_as_incomplete(self):
+        frame = (b'event: response.output_text.delta\ndata: {"delta":"answer"}\n\n'
+                 b'event: response.completed\ndata: {"response":{"output":[]}}\n\n')
+
+        def upstream(_request):
+            return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=frame)
+
+        with patch("gateway.forwarder.append_events", side_effect=RuntimeError("database unavailable")):
+            response = await self._send(self.clients[0], self._body("hello"), upstream)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"answer", response.content)
+        async with session_factory()() as session:
+            run = await session.scalar(select(Run).where(Run.credential_id == self.credential))
+            count = (await session.scalars(select(RunEvent).where(RunEvent.run_id == run.id))).all()
+        self.assertEqual(run.outcome, "incomplete")
+        self.assertEqual(run.error_code, "capture_error")
+        self.assertEqual(count, [])
 
     async def test_collaborator_can_use_governance_when_granted(self):
         async with session_factory()() as session, session.begin():
@@ -447,7 +580,7 @@ class ChatTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(preview.headers["cache-control"], "private, no-store")
         self.assertEqual((await self.clients[1].get(path)).status_code, 404)
         self.assertEqual((await self.clients[1].get(f"{path}/preview")).status_code, 404)
-        self.assertEqual((await self.clients[2].get(path)).status_code, 403)
+        self.assertEqual((await self.clients[2].get(path)).status_code, 404)
         async with AsyncClient(transport=httpx.ASGITransport(app=app), base_url="https://app.test") as anonymous:
             self.assertEqual((await anonymous.get(path)).status_code, 401)
 
@@ -553,7 +686,8 @@ class ChatTests(unittest.IsolatedAsyncioTestCase):
         second = await self._send(self.clients[0], self._body("Como vai?"), upstream)
         self.assertEqual(second.status_code, 200)
         self.assertEqual(second.headers["x-conversation-id"], first_conversation)
-        self.assertEqual(seen[1]["input"], [{"role": "system", "content": CHAT_CAPABILITIES},
+        self.assertTrue(seen[1]["input"][0]["content"].startswith(CHAT_CAPABILITIES))
+        self.assertEqual(seen[1]["input"][1:], [
             {"role": "user", "content": "Olá"},
             {"role": "assistant", "content": "answer-1"},
             {"role": "user", "content": "Como vai?"},
@@ -566,8 +700,8 @@ class ChatTests(unittest.IsolatedAsyncioTestCase):
         other = await self._send(self.clients[1], self._body("Outra pessoa"), upstream)
         self.assertEqual(other.status_code, 200)
         self.assertNotEqual(other.headers["x-conversation-id"], first_conversation)
-        self.assertEqual(seen[2]["input"], [{"role": "system", "content": CHAT_CAPABILITIES},
-                                             {"role": "user", "content": "Outra pessoa"}])
+        self.assertTrue(seen[2]["input"][0]["content"].startswith(CHAT_CAPABILITIES))
+        self.assertEqual(seen[2]["input"][1:], [{"role": "user", "content": "Outra pessoa"}])
 
         mine = (await self.clients[0].get("/api/chat/history")).json()
         theirs = (await self.clients[1].get("/api/chat/history")).json()
@@ -594,6 +728,9 @@ class ChatTests(unittest.IsolatedAsyncioTestCase):
         visible_ids = {item["run_id"] for item in governance["runs"]}
         self.assertIn(str(first_run), visible_ids)
         self.assertIn(str(legacy.run_id), visible_ids)
+        chat_run = next(item for item in governance["runs"] if item["run_id"] == str(first_run))
+        self.assertEqual(chat_run["source"], "Chat do Maximus")
+        self.assertIsInstance(chat_run["duration_ms"], int)
         detail = await self.clients[2].get(f"/api/governance/runs/{first_run}")
         self.assertEqual(detail.status_code, 200)
         self.assertEqual(detail.json()["request"]["input"][-1]["content"], "Olá")
@@ -870,8 +1007,9 @@ class ChatTests(unittest.IsolatedAsyncioTestCase):
             run.response_json = {"output": [{"type": "message", "role": "assistant",
                 "content": [{"type": "output_text", "text": "old answer"}]}]}
         _, _, body = await admit_chat(employee_id, self.credential, uuid4(), "test-model", "fresh")
-        self.assertEqual(json.loads(body)["input"], [{"role": "system", "content": CHAT_CAPABILITIES},
-                                                     {"role": "user", "content": "fresh"}])
+        input_items = json.loads(body)["input"]
+        self.assertTrue(input_items[0]["content"].startswith(CHAT_CAPABILITIES))
+        self.assertEqual(input_items[1:], [{"role": "user", "content": "fresh"}])
 
     def test_email_contains_only_category_and_protected_reference(self):
         class SMTP:

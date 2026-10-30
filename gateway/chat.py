@@ -169,7 +169,7 @@ def _knowledge_error(exc: KnowledgeError):
 
 
 def _ready(employee: EmployeeInfo, role: str) -> None:
-    allowed = employee.role == role or (role == "governance" and employee.can_govern)
+    allowed = employee.role == role or (role == "governance" and employee.can_govern) or (role == "collaborator" and employee.role == "governance")
     if employee.must_change_password or not allowed:
         raise HTTPException(403, "account unavailable")
 
