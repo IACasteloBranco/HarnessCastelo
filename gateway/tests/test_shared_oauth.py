@@ -144,22 +144,22 @@ class SharedOAuthTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(credential.token_ciphertext)
 
         with self.assertRaises(UnavailableAssignment):
-            await admit_employee(ids[self.third], self.credential, RequestRecord("GET", "models", b""))
+            await admit_employee(ids[self.third], self.credential, RequestRecord("GET", "models", b""), origin="api")
         with self.assertRaises(UnavailableAssignment):
-            await admit_employee(ids[self.second], self.credential, RequestRecord("GET", "models", b""))
+            await admit_employee(ids[self.second], self.credential, RequestRecord("GET", "models", b""), origin="api")
         async with session_factory()() as session, session.begin():
             await session.execute(update(Employee).where(Employee.id == ids[self.second]).values(
                 must_change_password=False))
-        one = await admit_employee(ids[self.first], self.credential, RequestRecord("GET", "models", b""))
-        two = await admit_employee(ids[self.second], self.credential, RequestRecord("GET", "models", b""))
+        one = await admit_employee(ids[self.first], self.credential, RequestRecord("GET", "models", b""), origin="api")
+        two = await admit_employee(ids[self.second], self.credential, RequestRecord("GET", "models", b""), origin="api")
         with self.assertRaises(QuotaExceeded):
-            await admit_employee(ids[self.first], self.credential, RequestRecord("GET", "models", b""))
+            await admit_employee(ids[self.first], self.credential, RequestRecord("GET", "models", b""), origin="api")
         async with session_factory()() as session:
             self.assertEqual(await session.scalar(select(Run.employee_id).where(Run.id == one.run_id)), ids[self.first])
             self.assertEqual(await session.scalar(select(Run.employee_id).where(Run.id == two.run_id)), ids[self.second])
         await unassign_credential(self.credential, self.second)
         with self.assertRaises(UnavailableAssignment):
-            await admit_employee(ids[self.second], self.credential, RequestRecord("GET", "models", b""))
+            await admit_employee(ids[self.second], self.credential, RequestRecord("GET", "models", b""), origin="api")
 
     async def test_callback_requires_same_session_and_valid_state(self):
         await self._login_ready()
@@ -190,11 +190,15 @@ class SharedOAuthTests(unittest.IsolatedAsyncioTestCase):
             side_effect=lambda **kwargs: AsyncClient(transport=httpx.MockTransport(
                 lambda request: httpx.Response(200, json={"data": []}))),
         ):
-            response = await self.client.post(path, json={}, headers={"Origin": "https://app.test"})
+            response = await self.client.post(path, json={"input": [
+                {"role": "system", "content": "Atualize um perfil curto, em terceira pessoa"},
+                {"role": "user", "content": "Pedido enviado pela API"},
+            ]}, headers={"Origin": "https://app.test"})
         self.assertEqual(response.status_code, 200)
         async with session_factory()() as session:
             run = await session.scalar(select(Run).where(Run.credential_id == self.credential))
             self.assertEqual(run.employee_id, employee_id)
+            self.assertEqual(run.origin, "api")
 
 
 if __name__ == "__main__":

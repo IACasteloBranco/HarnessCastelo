@@ -1813,10 +1813,15 @@ function renderGovernanceRuns(runs, append) {
 
 function renderRunDetail(detail) {
   const startedAt = Date.parse(detail.started_at);
+  const internal = detail.is_internal === true;
+  const actor = internal ? `Maximus (conta ${detail.employee_code || "não identificada"})`
+    : detail.origin === "legacy_unknown" ? `Não identificado (conta ${detail.employee_code || "não identificada"})`
+    : detail.employee_code || (detail.employee_id ? "Colaborador" : "API sem usuário interno");
   const fields = [
-    ["Quem fez", detail.employee_code || (detail.employee_id ? "Colaborador" : "API sem usuário interno")],
+    ["Origem", detail.source || "Origem não identificada"],
+    ["Quem fez", actor],
     ["Horário", Number.isNaN(startedAt) ? "Não registrado" : new Date(startedAt).toLocaleString("pt-BR")],
-    ["Prompt", typeof detail.prompt === "string" && detail.prompt ? detail.prompt : "Não registrado"],
+    [detail.origin === "chat" ? "Prompt" : "Entrada", typeof detail.prompt === "string" && detail.prompt ? detail.prompt : "Sem entrada textual"],
     ["Resposta", assistantText(detail.response) || "Não registrada"],
   ];
   const content = $("run-detail-content");

@@ -4,6 +4,7 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from backend.internal_auth import EmployeeInfo, resolve_session
+from backend.governance_access import has_governance_access
 from .db import connect, record_privacy_audit
 from .settings import Settings, get_settings
 
@@ -36,7 +37,7 @@ def require_machine_viewer(
 def require_operator_token(
     employee: Annotated[EmployeeInfo, Depends(require_capture_token)],
 ) -> dict:
-    if employee.role != "governance" and not employee.can_govern:
+    if not has_governance_access(employee.role, employee.can_govern):
         raise HTTPException(status_code=403, detail="Governance access required")
     return {"organization_code": employee.organization_code, "department_code": employee.department_code}
 
@@ -45,7 +46,7 @@ def require_content_viewer(
     employee: EmployeeInfo = Depends(require_capture_token),
     settings: Settings = Depends(get_settings),
 ) -> dict:
-    if employee.role != "governance" and not employee.can_govern:
+    if not has_governance_access(employee.role, employee.can_govern):
         with connect(settings) as db:
             route = request.scope["route"].path
             record_privacy_audit(db, "content_read_denied", employee.code,
@@ -58,6 +59,6 @@ def require_content_viewer(
 def require_analytics_operator(
     employee: Annotated[EmployeeInfo, Depends(require_capture_token)],
 ) -> dict:
-    if employee.role != "governance" and not employee.can_govern:
+    if not has_governance_access(employee.role, employee.can_govern):
         raise HTTPException(status_code=403, detail="Governance access required")
     return {"organization_code": employee.organization_code, "department_code": employee.department_code}

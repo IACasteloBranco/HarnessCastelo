@@ -79,7 +79,10 @@ with sync_playwright() as playwright:
             if path.startswith("governance/reports/daily"):
                 return mock(route, {"usage": [{"day": "2026-10-25", "department": "CONTABIL", "runs": 3, "errors": 1, "latency_ms": 3000, "latency_samples": 2}], "findings": [{"day": "2026-10-25", "department": "CONTABIL", "category": "sensitive_data", "count": 1}]})
             if path == "governance/runs":
-                return mock(route, {"runs": [{"run_id": "11111111-1111-4111-8111-111111111111", "outcome": "completed", "started_at": "2026-10-25T10:00:00Z", "source": "Chat do Maximus", "duration_ms": 2400}]})
+                return mock(route, {"runs": [
+                    {"run_id": "11111111-1111-4111-8111-111111111111", "outcome": "completed", "started_at": "2026-10-25T10:00:00Z", "source": "Chat do Maximus", "duration_ms": 2400},
+                    {"run_id": "22222222-2222-4222-8222-222222222222", "outcome": "completed", "started_at": "2026-10-25T10:00:01Z", "source": "Perfil automático", "duration_ms": 300},
+                ]})
             if path == "governance/findings":
                 return mock(route, {"findings": []})
             if path == "governance/alerts":
@@ -95,9 +98,17 @@ with sync_playwright() as playwright:
                     "platform": "chatgpt_web", "status": "complete", "received_at": "2026-10-25T10:00:00Z",
                     "prompt": {"text": "Prompt sintético de teste"},
                     "responses": [{"text": "Resposta sintética de teste"}]})
+            if path == "governance/runs/22222222-2222-4222-8222-222222222222":
+                return mock(route, {"run_id": "22222222-2222-4222-8222-222222222222",
+                                    "employee_code": "IA", "started_at": "2026-10-25T10:00:01Z",
+                                    "origin": "profile_learning", "source": "Perfil automático", "is_internal": True,
+                                    "prompt": '{"message":"Olá"}',
+                                    "response": {"output": [{"type": "message", "role": "assistant",
+                                        "content": [{"type": "output_text", "text": '{"profile":""}'}]}]}})
             if path.startswith("governance/runs/"):
                 return mock(route, {"run_id": "11111111-1111-4111-8111-111111111111",
                                     "employee_code": "COLAB001", "started_at": "2026-10-25T10:00:00Z",
+                                    "origin": "chat", "source": "Chat do Maximus",
                                     "prompt": "Como consultar o relatório?",
                                     "response": {"output": [{"type": "message", "role": "assistant",
                                         "content": [{"type": "output_text", "text": "Abra a tela de relatórios."}]}]},
@@ -261,14 +272,22 @@ with sync_playwright() as playwright:
             page.get_by_role("button", name="Atividade", exact=True).click()
             page.locator("#governance-runs button").first.click()
             page.get_by_text("Esta leitura de conteúdo bruto foi registrada para auditoria.").wait_for()
+            page.get_by_text("Abra a tela de relatórios.").wait_for()
             assert any(path.startswith("governance/runs/") for path in calls)
             summary = page.locator("#run-detail-content").inner_text()
             assert page.locator("#run-detail-content h3").all_text_contents() == [
-                "Quem fez", "Horário", "Prompt", "Resposta"]
+                "Origem", "Quem fez", "Horário", "Prompt", "Resposta"]
             values = page.locator("#run-detail-content p").all_text_contents()
-            assert values[0] == "COLAB001" and "/" in values[1]
-            assert values[2:] == ["Como consultar o relatório?", "Abra a tela de relatórios."]
+            assert values[:2] == ["Chat do Maximus", "COLAB001"] and "/" in values[2]
+            assert values[3:] == ["Como consultar o relatório?", "Abra a tela de relatórios."]
             assert not summary.lstrip().startswith("{")
+            page.locator("#governance-runs button").last.click()
+            page.get_by_text("Maximus (conta IA)").wait_for()
+            assert page.locator("#run-detail-content h3").all_text_contents() == [
+                "Origem", "Quem fez", "Horário", "Entrada", "Resposta"]
+            values = page.locator("#run-detail-content p").all_text_contents()
+            assert values[:2] == ["Perfil automático", "Maximus (conta IA)"]
+            assert values[3:] == ['{"message":"Olá"}', '{"profile":""}']
             page.get_by_role("button", name="Capturas", exact=True).click()
             page.get_by_role("heading", name="Capturas da extensão").wait_for()
             page.locator("#capture-employee").fill("COLAB001")

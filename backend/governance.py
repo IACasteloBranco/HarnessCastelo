@@ -12,7 +12,8 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import or_, select, tuple_, update
 
-from backend.database import AlertOutbox, Employee, PromptFinding, Run, session_factory
+from backend.database import AlertOutbox, Employee, INTERNAL_RUN_ORIGINS, PromptFinding, Run, session_factory
+from backend.governance_access import has_governance_access
 
 
 class GovernanceNotFound(Exception):
@@ -87,7 +88,7 @@ async def queue_findings(session, run_id: UUID, text: str, now: datetime) -> Non
 
 async def _governance_actor(session, actor_id: UUID) -> Employee:
     actor = await session.get(Employee, actor_id)
-    if actor is None or actor.disabled or actor.must_change_password or not (actor.role == "governance" or actor.can_govern):
+    if actor is None or actor.disabled or actor.must_change_password or not has_governance_access(actor.role, actor.can_govern):
         raise PermissionError
     return actor
 
@@ -97,7 +98,8 @@ async def findings_for_governance(actor_id: UUID, before: UUID | None, limit: in
         actor = await _governance_actor(session, actor_id)
         query = (select(PromptFinding).join(Run, Run.id == PromptFinding.run_id)
                  .outerjoin(Employee, Employee.id == Run.employee_id)
-                 .where(or_(Run.employee_id.is_(None), Employee.organization_id == actor.organization_id)))
+                 .where(or_(Run.employee_id.is_(None), Employee.organization_id == actor.organization_id),
+                        ~Run.origin.in_(INTERNAL_RUN_ORIGINS)))
         if before:
             cursor = await session.scalar(query.where(PromptFinding.id == before))
             if cursor is None:
@@ -117,7 +119,8 @@ async def alerts_for_governance(actor_id: UUID, before: UUID | None, limit: int)
         query = (select(AlertOutbox, PromptFinding).join(PromptFinding, PromptFinding.id == AlertOutbox.finding_id)
                  .join(Run, Run.id == PromptFinding.run_id)
                  .outerjoin(Employee, Employee.id == Run.employee_id)
-                 .where(or_(Run.employee_id.is_(None), Employee.organization_id == actor.organization_id)))
+                 .where(or_(Run.employee_id.is_(None), Employee.organization_id == actor.organization_id),
+                        ~Run.origin.in_(INTERNAL_RUN_ORIGINS)))
         if before:
             cursor = await session.scalar(query.where(AlertOutbox.id == before))
             if cursor is None:
@@ -146,6 +149,8 @@ async def _claim_due() -> list[ClaimedAlert]:
         rows = (await session.execute(
             select(AlertOutbox, PromptFinding)
             .join(PromptFinding, PromptFinding.id == AlertOutbox.finding_id)
+            .join(Run, Run.id == PromptFinding.run_id)
+            .where(~Run.origin.in_(INTERNAL_RUN_ORIGINS))
             .where(or_(
                 (AlertOutbox.status == "pending") & (AlertOutbox.next_attempt_at <= now),
                 (AlertOutbox.status == "leased") & (AlertOutbox.lease_until <= now),

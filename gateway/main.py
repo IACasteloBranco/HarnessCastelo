@@ -121,7 +121,7 @@ async def employee_proxy(request: Request, credential_id: str,
     body = await request.body()
     try:
         admitted = await admit_employee(employee.employee_id, credential_id,
-                                        RequestRecord(request.method, path, body))
+                                        RequestRecord(request.method, path, body), origin="api")
     except UnavailableAssignment:
         raise HTTPException(403, "credential unavailable")
     except QuotaExceeded as exc:

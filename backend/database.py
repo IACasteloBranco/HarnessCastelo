@@ -21,6 +21,9 @@ class Base(DeclarativeBase):
     pass
 
 
+INTERNAL_RUN_ORIGINS = frozenset(("title_generation", "profile_learning", "artifact_generation"))
+
+
 class Account(Base):
     __tablename__ = "accounts"
 
@@ -61,6 +64,10 @@ class Run(Base):
             "outcome IN ('open', 'completed', 'failed', 'incomplete', 'interrupted')",
             name="ck_runs_outcome",
         ),
+        CheckConstraint(
+            "origin IN ('chat', 'api', 'title_generation', 'profile_learning', 'artifact_generation', 'legacy_unknown')",
+            name="ck_runs_origin",
+        ),
         Index("ix_runs_credential_started", "credential_id", "started_at"),
         Index("ix_runs_started_outcome", "started_at", "outcome"),
         UniqueConstraint("employee_id", "client_message_id", name="uq_runs_employee_client_message"),
@@ -88,6 +95,7 @@ class Run(Base):
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     method: Mapped[str] = mapped_column(String(16), nullable=False)
     path: Mapped[str] = mapped_column(Text, nullable=False)
+    origin: Mapped[str] = mapped_column(String(24), nullable=False)
     model: Mapped[str | None] = mapped_column(String(255), nullable=True)
     request_body: Mapped[str] = mapped_column(Text, nullable=False)
     request_json: Mapped[dict | list | None] = mapped_column(JSONB, nullable=True)

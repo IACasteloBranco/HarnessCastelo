@@ -16,6 +16,7 @@ from sqlalchemy import select
 
 from backend.database import (Department, DepartmentDocument, DepartmentDocumentChunk,
                               Employee, session_factory)
+from backend.governance_access import has_governance_access
 from backend.store import _fernet
 
 EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
@@ -98,7 +99,7 @@ def _extract(name: str, data: bytes) -> list[tuple[int | None, str]]:
 async def _manager(session, employee_id: UUID) -> Employee:
     employee = await session.get(Employee, employee_id)
     if (employee is None or employee.disabled or employee.must_change_password
-            or not (employee.role == "governance" or employee.can_govern)):
+            or not has_governance_access(employee.role, employee.can_govern)):
         raise KnowledgeForbidden
     return employee
 
@@ -198,7 +199,7 @@ async def document_for_employee(employee_id: UUID, document_id: UUID) -> tuple[s
         document = await session.get(DepartmentDocument, document_id)
         if (employee is None or employee.disabled or employee.must_change_password or document is None
                 or document.organization_id != employee.organization_id
-                or not (employee.role == "governance" or employee.can_govern
+                or not (has_governance_access(employee.role, employee.can_govern)
                         or document.department_id == employee.department_id)):
             raise KnowledgeNotFound
         return document.name, document.mime_type, _fernet().decrypt(document.ciphertext)

@@ -552,7 +552,8 @@ async def suggest_title(conversation_id: UUID, request: Request,
     body = json.dumps(payload, ensure_ascii=False).encode()
     try:
         admitted = await admit_employee(employee.employee_id, credential_id,
-                                        RequestRecord("POST", "responses", body))
+                                        RequestRecord("POST", "responses", body),
+                                        origin="title_generation")
     except UnavailableAssignment:
         await release_title_prompt(employee.employee_id, conversation_id)
         raise HTTPException(403, "credential unavailable")
@@ -637,7 +638,8 @@ async def create_artifact(run_id: UUID, body: ArtifactBody, request: Request,
         upstream_body = json.dumps(payload, ensure_ascii=False).encode()
         try:
             admitted = await admit_employee(employee.employee_id, credential_id,
-                                            RequestRecord("POST", "responses", upstream_body))
+                                            RequestRecord("POST", "responses", upstream_body),
+                                            origin="artifact_generation")
         except UnavailableAssignment:
             raise HTTPException(403, "credential unavailable")
         except QuotaExceeded as exc:

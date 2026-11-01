@@ -29,7 +29,7 @@ from backend.governance import (ClaimedAlert, SMTPConfig, _claim_due, _finish_al
 from backend.shared_oauth import assign_credential, create_shared_credential
 from backend.retention import retain_daily, retain_once
 from backend.store import (RequestRecord, RunClosed, StreamEvent, TokenBundle,
-                           _encode_tokens, admit, append_events, finish_transport, heartbeat_run, issue_client_key,
+                           _encode_tokens, admit, admit_employee, append_events, finish_transport, heartbeat_run, issue_client_key,
                            recover_abandoned_runs)
 from gateway.main import app
 from gateway.chat import router as chat_router
@@ -234,6 +234,10 @@ class ChatTests(unittest.IsolatedAsyncioTestCase):
         async with session_factory()() as session, session.begin():
             run = await session.get(Run, admitted.run_id)
             run.lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+
+        await append_events(admitted.run_id, [StreamEvent(0, "response.completed", json.dumps({
+            "response": {"output": [{"type": "message", "role": "assistant",
+                                     "content": [{"type": "output_text", "text": "ok"}]}]}}))], 200)
 
         async def recover():
             async with session_factory()() as session, session.begin():
@@ -501,6 +505,42 @@ class ChatTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(profile["text"],
                          "O colaborador prefere respostas em tópicos e trabalha com contabilidade.")
         self.assertEqual(profile["version"], 2)
+        listed = (await self.clients[2].get("/api/governance/runs")).json()["runs"]
+        profile_runs = [item for item in listed if item["source"] == "Perfil automático"]
+        self.assertEqual(len(profile_runs), 3)
+        detail = (await self.clients[2].get(
+            f"/api/governance/runs/{profile_runs[0]['run_id']}")).json()
+        self.assertEqual(detail["source"], "Perfil automático")
+        self.assertTrue(detail["is_internal"])
+        self.assertIn("current_profile", detail["prompt"])
+        today = datetime.now(timezone.utc).date()
+        report = (await self.clients[2].get(
+            f"/api/governance/reports/daily?start={today}&end={today}")).json()
+        self.assertEqual(sum(row["runs"] for row in report["usage"]
+                             if row["department"] == self.dept), 3)
+        self.assertEqual(sum(row["count"] for row in report["findings"]
+                             if row["department"] == self.dept
+                             and row["category"] == "sensitive_data"), 1)
+        duplicate_id = uuid4()
+        async with session_factory()() as session, session.begin():
+            session.add(PromptFinding(id=duplicate_id, run_id=UUID(profile_runs[0]["run_id"]),
+                                      category="sensitive_data", rule_id="cpf_format",
+                                      confidence="review", created_at=datetime.now(timezone.utc)))
+            await session.flush()
+            session.add(AlertOutbox(id=uuid4(), finding_id=duplicate_id, status="pending",
+                                    attempts=0, created_at=datetime.now(timezone.utc),
+                                    next_attempt_at=datetime.now(timezone.utc)))
+        report = (await self.clients[2].get(
+            f"/api/governance/reports/daily?start={today}&end={today}")).json()
+        self.assertEqual(sum(row["count"] for row in report["findings"]
+                             if row["department"] == self.dept
+                             and row["category"] == "sensitive_data"), 1)
+        findings = (await self.clients[2].get("/api/governance/findings")).json()["findings"]
+        alerts = (await self.clients[2].get("/api/governance/alerts")).json()["alerts"]
+        self.assertNotIn(str(duplicate_id), {item["finding_id"] for item in findings})
+        self.assertNotIn(str(duplicate_id), {item["finding_id"] for item in alerts})
+        self.assertFalse(any(item.run_id == UUID(profile_runs[0]["run_id"])
+                             for item in await _claim_due()))
 
     async def test_manual_profile_edit_wins_over_older_automatic_revision(self):
         def upstream(_request):
@@ -633,6 +673,8 @@ class ChatTests(unittest.IsolatedAsyncioTestCase):
             csv_result = (await self.clients[0].post(base, json={"format": "csv"}, headers=ORIGIN)).json()
             xlsx_result = (await self.clients[0].post(base, json={"format": "xlsx"}, headers=ORIGIN)).json()
         self.assertEqual(len(seen), 2)
+        listed = (await self.clients[2].get("/api/governance/runs")).json()["runs"]
+        self.assertEqual(sum(item["source"] == "Planilha automática" for item in listed), 2)
         csv_data = (await self.clients[0].get(f"/api/chat/artifacts/{csv_result['id']}")).content.decode("utf-8-sig")
         self.assertEqual(list(csv.reader(io.StringIO(csv_data)))[1], ["A", "5"])
         csv_preview = (await self.clients[0].get(f"/api/chat/artifacts/{csv_result['id']}/preview")).json()
@@ -730,6 +772,8 @@ class ChatTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(str(legacy.run_id), visible_ids)
         chat_run = next(item for item in governance["runs"] if item["run_id"] == str(first_run))
         self.assertEqual(chat_run["source"], "Chat do Maximus")
+        self.assertEqual(next(item for item in governance["runs"]
+                              if item["run_id"] == str(legacy.run_id))["source"], "API")
         self.assertIsInstance(chat_run["duration_ms"], int)
         detail = await self.clients[2].get(f"/api/governance/runs/{first_run}")
         self.assertEqual(detail.status_code, 200)
@@ -738,9 +782,84 @@ class ChatTests(unittest.IsolatedAsyncioTestCase):
         old_detail = await self.clients[2].get(f"/api/governance/runs/{legacy.run_id}")
         self.assertEqual(old_detail.status_code, 200)
         self.assertIsNone(old_detail.json()["employee_id"])
+        self.assertEqual(old_detail.json()["prompt"], "legacy")
         async with session_factory()() as session:
             audit = await session.scalar(select(GovernanceAccess).where(GovernanceAccess.run_id == first_run))
             self.assertEqual(audit.action, "read")
+
+    async def test_empty_terminal_output_keeps_streamed_assistant_answer(self):
+        requests = []
+        answer = "Resposta preservada"
+        item = {"type": "message", "role": "assistant",
+                "content": [{"type": "output_text", "text": answer}]}
+
+        def upstream(request):
+            requests.append(json.loads(request.content))
+            if len(requests) == 1:
+                frames = (f"event: response.output_item.done\ndata: {json.dumps({'item': item})}\n\n"
+                          'event: response.completed\ndata: {"response":{"output":[]}}\n\n')
+            else:
+                frames = ('event: response.completed\ndata: '
+                          + json.dumps({"response": {"output": [item]}}) + "\n\n")
+            return httpx.Response(200, headers={"content-type": "text/event-stream"},
+                                  content=frames.encode())
+
+        first = await self._send(self.clients[0], self._body("Primeira"), upstream)
+        self.assertEqual(first.status_code, 200)
+        run_id = first.headers["x-run-id"]
+        detail = (await self.clients[0].get(f"/api/chat/runs/{run_id}")).json()
+        self.assertEqual(detail["response"]["output"], [item])
+        self.assertEqual(json.loads(detail["events"][-1]["data"])["response"]["output"], [])
+
+        # Simulate the already-persisted staging run from before the fix.
+        async with session_factory()() as session, session.begin():
+            run = await session.get(Run, UUID(run_id))
+            run.response_json = {"output": []}
+
+        second = await self._send(self.clients[0], self._body("Segunda"), upstream)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(requests[1]["input"][-2:], [
+            {"role": "assistant", "content": answer},
+            {"role": "user", "content": "Segunda"},
+        ])
+        repaired = (await self.clients[0].get(f"/api/chat/runs/{run_id}")).json()
+        self.assertEqual(repaired["response"]["output"], [item])
+
+    async def test_empty_terminal_without_assistant_item_is_incomplete(self):
+        def upstream(_request):
+            return httpx.Response(200, headers={"content-type": "text/event-stream"},
+                                  content=b'event: response.completed\ndata: {"response":{"output":[]}}\n\n')
+
+        first = await self._send(self.clients[0], self._body("Sem resposta"), upstream)
+        self.assertEqual(first.status_code, 200)
+        async with session_factory()() as session:
+            run = await session.get(Run, UUID(first.headers["x-run-id"]))
+            self.assertEqual((run.outcome, run.error_code),
+                             ("incomplete", "assistant_output_missing"))
+        second = await self._send(self.clients[0], self._body("Tentar novamente"), upstream)
+        self.assertEqual(second.status_code, 200)
+
+    async def test_empty_second_turn_does_not_reuse_first_turn_output(self):
+        async with session_factory()() as session:
+            employee_id = await session.scalar(select(Employee.id).where(Employee.code == self.first))
+        admitted, _, _ = await admit_chat(employee_id, self.credential, uuid4(),
+                                          "test-model", "Buscar documento")
+        item = {"type": "message", "role": "assistant",
+                "content": [{"type": "output_text", "text": "Texto do primeiro turno"}]}
+        await append_events(admitted.run_id, [
+            StreamEvent(0, "response.output_item.done", json.dumps({"item": item})),
+            StreamEvent(1, "response.completed", json.dumps({"response": {
+                "output": [{"type": "function_call", "name": "search_department_knowledge"}],
+                "usage": {"input_tokens": 2}}})),
+            StreamEvent(2, "response.completed", json.dumps({"response": {
+                "output": [], "usage": {"input_tokens": 3}}})),
+        ], 200)
+        await finish_transport(admitted.run_id, 200, "completed")
+        async with session_factory()() as session:
+            run = await session.get(Run, admitted.run_id)
+            self.assertEqual((run.outcome, run.error_code),
+                             ("incomplete", "assistant_output_missing"))
+            self.assertEqual(run.usage_json, {"input_tokens": 5})
 
     async def test_multiple_conversations_search_title_and_soft_delete(self):
         seen = []
@@ -784,6 +903,8 @@ class ChatTests(unittest.IsolatedAsyncioTestCase):
                 f"/api/chat/conversations/{first_id}/suggest-title", headers=ORIGIN)
         self.assertEqual(title.status_code, 200)
         self.assertEqual(title.json()["title"], "Tributos estaduais")
+        listed = (await self.clients[2].get("/api/governance/runs")).json()["runs"]
+        self.assertEqual(sum(item["source"] == "Título automático" for item in listed), 1)
         self.assertEqual(len(seen), 3)
         self.assertEqual((await self.clients[0].post(
             f"/api/chat/conversations/{first_id}/suggest-title", headers=ORIGIN)).json()["title"], None)
@@ -921,6 +1042,9 @@ class ChatTests(unittest.IsolatedAsyncioTestCase):
                 "content": [{"type": "output_text", "text": "ack"}]}]}
             first.finished_at = datetime.now(timezone.utc)
         recent = await admit_chat(employee_id, self.credential, uuid4(), "test-model", "recent")
+        internal = await admit_employee(employee_id, self.credential,
+                                        RequestRecord("POST", "responses", b'{"input":"internal"}'),
+                                        origin="profile_learning")
         now = datetime.now(timezone.utc)
         old_day = (now - timedelta(days=91)).date()
         async with session_factory()() as session, session.begin():
@@ -934,12 +1058,20 @@ class ChatTests(unittest.IsolatedAsyncioTestCase):
             active = await session.get(Run, recent[0].run_id)
             active.outcome = "completed"
             active.finished_at = now
+            background = await session.get(Run, internal.run_id)
+            background.started_at = now - timedelta(days=91)
+            background.finished_at = background.started_at + timedelta(milliseconds=75)
+            background.outcome = "completed"
+            session.add(PromptFinding(id=uuid4(), run_id=internal.run_id,
+                                      category="sensitive_data", rule_id="pem_private_key",
+                                      confidence="high", created_at=background.started_at))
         report_url = f"/api/governance/reports/daily?start={old_day}&end={now.date()}"
         self.assertEqual((await self.clients[0].get(report_url)).status_code, 403)
         before = (await self.clients[2].get(report_url)).json()
         own_usage = [row for row in before["usage"] if row["department"] == self.dept]
         own_findings = [row for row in before["findings"] if row["department"] == self.dept]
         self.assertEqual(sum(row["runs"] for row in own_usage), 2)
+        self.assertEqual(sum(row["count"] for row in own_findings), 1)
         self.assertGreaterEqual(await retain_daily(now), 1)
         self.assertEqual(await retain_daily(now), 0)
         after = (await self.clients[2].get(report_url)).json()
@@ -977,7 +1109,7 @@ class ChatTests(unittest.IsolatedAsyncioTestCase):
             session.add(Run(id=run_id, credential_id=self.credential, employee_id=employee.id,
                             organization_id=employee.organization_id, department_id=employee.department_id,
                             started_at=now - timedelta(days=92), finished_at=now - timedelta(days=92),
-                            method="POST", path="responses", request_body="secret",
+                            method="POST", path="responses", origin="api", request_body="secret",
                             outcome="failed", http_status=500))
 
         def fail_delete(_connection, _cursor, statement, _parameters, _context, _many):

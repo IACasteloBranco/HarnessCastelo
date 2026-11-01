@@ -9,11 +9,13 @@ from uuid import UUID, uuid4
 from sqlalchemy import String, cast, delete, exists, or_, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert
 
-from backend.database import (ChatArtifact, ChatAttachment, ContextNote, Conversation, Employee, GovernanceAccess, Project, Run,
+from backend.database import (ChatArtifact, ChatAttachment, ContextNote, Conversation, Employee, GovernanceAccess, INTERNAL_RUN_ORIGINS, Project, Run,
                               RunEvent, session_factory)
+from backend.governance import current_prompt
+from backend.governance_access import has_governance_access
 from backend.store import (AdmittedRun, ChatRun, RequestRecord,
                            _fernet, _locked_employee_credential, _record_run,
-                           recover_abandoned_runs)
+                           recover_abandoned_runs, recover_chat_output)
 
 
 class ChatConflict(Exception):
@@ -559,6 +561,8 @@ async def admit_chat(employee_id: UUID, credential_id: str, client_message_id: U
                 json.dumps(saved_context, ensure_ascii=False)})
         for run in prior:
             answer = _assistant_text(run.response_json)
+            if answer is None and await recover_chat_output(session, run):
+                answer = _assistant_text(run.response_json)
             if not run.chat_prompt or answer is None:
                 raise ChatConflict("context_unavailable", run.id)
             input_items.extend((
@@ -590,7 +594,7 @@ async def admit_chat(employee_id: UUID, credential_id: str, client_message_id: U
         request = RequestRecord("POST", "responses", json.dumps(payload, ensure_ascii=False).encode())
         admitted = await _record_run(session, credential, request, employee_id,
                                      ChatRun(conversation.id, client_message_id, text,
-                                             [metadata for metadata, _ in files or []]))
+                                             [metadata for metadata, _ in files or []]), origin="chat")
         if files:
             await session.flush()
             session.add_all(ChatAttachment(
@@ -603,13 +607,14 @@ async def admit_chat(employee_id: UUID, credential_id: str, client_message_id: U
 
 
 def _summary(run: Run) -> dict:
+    request = run.request_json if isinstance(run.request_json, dict) else {}
     return {
         "run_id": run.id,
         "conversation_id": run.conversation_id,
         "credential_id": run.credential_id,
         "client_message_id": run.client_message_id,
         "prompt": run.chat_prompt,
-        "attachments": (run.request_json or {}).get("attachments", []),
+        "attachments": request.get("attachments", []),
         "response": run.response_json,
         "outcome": run.outcome,
         "http_status": run.http_status,
@@ -900,10 +905,20 @@ async def employee_artifact(employee_id: UUID, artifact_id: UUID) -> tuple[str, 
         return artifact.name, artifact.mime_type, _fernet().decrypt(artifact.ciphertext)
 
 
+RUN_SOURCES = {
+    "chat": "Chat do Maximus",
+    "api": "API",
+    "title_generation": "Título automático",
+    "profile_learning": "Perfil automático",
+    "artifact_generation": "Planilha automática",
+    "legacy_unknown": "Origem histórica não identificada",
+}
+
+
 async def governance_runs(actor_id: UUID, before: UUID | None, limit: int) -> list[dict]:
     async with session_factory()() as session:
         actor = await session.get(Employee, actor_id)
-        if actor is None or actor.disabled or actor.must_change_password or not (actor.role == "governance" or actor.can_govern):
+        if actor is None or actor.disabled or actor.must_change_password or not has_governance_access(actor.role, actor.can_govern):
             raise PermissionError
         scope = or_(Run.employee_id.is_(None), Employee.organization_id == actor.organization_id)
         query = select(Run).outerjoin(Employee, Employee.id == Run.employee_id).where(scope)
@@ -917,7 +932,7 @@ async def governance_runs(actor_id: UUID, before: UUID | None, limit: int) -> li
             Run.started_at.desc(), Run.id.desc()).limit(limit))).all()
         return [{"run_id": run.id, "employee_id": run.employee_id,
                  "conversation_id": run.conversation_id, "outcome": run.outcome,
-                 "source": "Chat do Maximus" if run.conversation_id else "API",
+                 "origin": run.origin, "source": RUN_SOURCES[run.origin],
                  "duration_ms": max(0, round((run.finished_at - run.started_at).total_seconds() * 1000)) if run.finished_at else None,
                  "started_at": run.started_at} for run in runs]
 
@@ -927,7 +942,7 @@ async def governance_run(actor_id: UUID, run_id: UUID, action: str = "read") -> 
         raise ValueError("invalid governance action")
     async with session_factory()() as session, session.begin():
         actor = await session.get(Employee, actor_id)
-        if actor is None or actor.disabled or actor.must_change_password or not (actor.role == "governance" or actor.can_govern):
+        if actor is None or actor.disabled or actor.must_change_password or not has_governance_access(actor.role, actor.can_govern):
             raise PermissionError
         run = await session.get(Run, run_id)
         author = await session.get(Employee, run.employee_id) if run and run.employee_id else None
@@ -940,7 +955,11 @@ async def governance_run(actor_id: UUID, run_id: UUID, action: str = "read") -> 
                                      run_id=run_id, action=action,
                                      accessed_at=datetime.now(timezone.utc)))
         await session.flush()
-        return {**_summary(run), "employee_id": run.employee_id,
+        prompt = run.chat_prompt if run.origin == "chat" else current_prompt(run.request_json, run.path)
+        return {**_summary(run), "prompt": prompt or None,
+                "origin": run.origin, "source": RUN_SOURCES[run.origin],
+                "is_internal": run.origin in INTERNAL_RUN_ORIGINS,
+                "employee_id": run.employee_id,
                 "employee_code": author.code if author else None,
                 "request": run.request_json, "request_body": run.request_body,
                 "events": [{"ordinal": event.ordinal, "type": event.event_type,

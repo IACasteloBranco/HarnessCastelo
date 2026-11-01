@@ -10,7 +10,8 @@ from uuid import UUID, uuid4
 from cryptography.fernet import Fernet
 from sqlalchemy import func, select
 
-from backend.database import Account, ClientKey, CredentialRecord, Employee, EmployeeCredential, Run, RunEvent, session_factory
+from backend.database import (Account, ClientKey, CredentialRecord, Employee, EmployeeCredential,
+                              INTERNAL_RUN_ORIGINS, Run, RunEvent, session_factory)
 from backend.governance import current_prompt, queue_findings
 
 
@@ -152,13 +153,14 @@ async def admit(client_key: str, request: RequestRecord) -> AdmittedRun:
         key = await session.scalar(select(ClientKey).where(ClientKey.key_hash == key_hash).with_for_update())
         if not account or account.disabled or not credential or credential.revoked or not key or key.revoked:
             raise UnknownClientKey
-        return await _record_run(session, credential, request, None)
+        return await _record_run(session, credential, request, None, origin="api")
 
 
-async def admit_employee(employee_id: UUID, credential_id: str, request: RequestRecord) -> AdmittedRun:
+async def admit_employee(employee_id: UUID, credential_id: str, request: RequestRecord,
+                         *, origin: str) -> AdmittedRun:
     async with session_factory()() as session, session.begin():
         credential = await _locked_employee_credential(session, employee_id, credential_id)
-        return await _record_run(session, credential, request, employee_id)
+        return await _record_run(session, credential, request, employee_id, origin=origin)
 
 
 async def credential_for_employee(employee_id: UUID, credential_id: str) -> Credential:
@@ -193,7 +195,8 @@ async def _locked_employee_credential(session, employee_id: UUID,
 
 
 async def _record_run(session, credential: CredentialRecord, request: RequestRecord,
-                      employee_id: UUID | None, chat: ChatRun | None = None) -> AdmittedRun:
+                      employee_id: UUID | None, chat: ChatRun | None = None,
+                      *, origin: str) -> AdmittedRun:
     now = datetime.now(timezone.utc)
     day_start = datetime.combine(now.date(), time.min, tzinfo=timezone.utc)
     run_id = uuid4()
@@ -239,12 +242,13 @@ async def _record_run(session, credential: CredentialRecord, request: RequestRec
         chat_prompt=chat.text if chat else None,
         context_learning_status="pending" if chat else "done",
         started_at=now, lease_expires_at=now + RUN_LEASE,
-        method=request.method, path=request.path,
+        method=request.method, path=request.path, origin=origin,
         model=payload.get("model") if isinstance(payload, dict) else None,
         request_body=body_text,
         request_json=stored_payload if isinstance(stored_payload, (dict, list)) else None,
     ))
-    await queue_findings(session, run_id, chat.text if chat else current_prompt(payload, request.path), now)
+    if origin not in INTERNAL_RUN_ORIGINS:
+        await queue_findings(session, run_id, chat.text if chat else current_prompt(payload, request.path), now)
     return AdmittedRun(run_id, _credential(credential))
 
 
@@ -507,6 +511,50 @@ async def append_events(run_id: UUID, events: Sequence[StreamEvent], http_status
                     usage = response.get("usage")
                     if isinstance(usage, dict):
                         run.usage_json = _sum_usage(run.usage_json, usage)
+                    if event.event_type == "response.completed" and response.get("output") == []:
+                        await session.flush()
+                        await recover_chat_output(session, run, event.ordinal)
+
+
+async def recover_chat_output(session, run: Run, terminal_ordinal: int | None = None) -> bool:
+    if (run.conversation_id is None or not isinstance(run.response_json, dict)
+            or run.response_json.get("output") != []):
+        return False
+    if terminal_ordinal is None:
+        terminal_ordinal = await session.scalar(select(func.max(RunEvent.ordinal)).where(
+            RunEvent.run_id == run.id, RunEvent.event_type == "response.completed"))
+    if terminal_ordinal is None:
+        return False
+    previous_terminal = await session.scalar(select(func.max(RunEvent.ordinal)).where(
+        RunEvent.run_id == run.id, RunEvent.ordinal < terminal_ordinal,
+        RunEvent.event_type.in_(("response.completed", "response.failed", "response.incomplete", "error"))))
+    query = select(RunEvent.data).where(
+        RunEvent.run_id == run.id, RunEvent.event_type == "response.output_item.done",
+        RunEvent.ordinal < terminal_ordinal)
+    if previous_terminal is not None:
+        query = query.where(RunEvent.ordinal > previous_terminal)
+    items = []
+    for data in (await session.scalars(query.order_by(RunEvent.ordinal))).all():
+        try:
+            payload = json.loads(data)
+        except json.JSONDecodeError:
+            continue
+        item = payload.get("item") if isinstance(payload, dict) else None
+        if not isinstance(item, dict) or item.get("type") != "message" or item.get("role") != "assistant":
+            continue
+        content = item.get("content")
+        if not isinstance(content, list) or not any(
+            isinstance(part, dict) and (
+                (part.get("type") == "output_text" and isinstance(part.get("text"), str) and part["text"])
+                or (part.get("type") == "refusal" and isinstance(part.get("refusal"), str) and part["refusal"])
+            ) for part in content
+        ):
+            continue
+        items.append(item)
+    if not items:
+        return False
+    run.response_json = {**run.response_json, "output": items, "maximus_recovered_from_events": True}
+    return True
 
 
 async def finish_transport(
@@ -518,6 +566,12 @@ async def finish_transport(
     async with session_factory()() as session, session.begin():
         run = await session.scalar(select(Run).where(Run.id == run_id).with_for_update())
         if run and run.outcome == "open":
+            if (outcome == "completed" and run.conversation_id is not None
+                    and (not isinstance(run.response_json, dict)
+                         or not isinstance(run.response_json.get("output"), list)
+                         or not run.response_json["output"])):
+                outcome = "incomplete"
+                error_code = "assistant_output_missing"
             run.http_status = http_status
             run.outcome = outcome
             run.error_code = error_code
