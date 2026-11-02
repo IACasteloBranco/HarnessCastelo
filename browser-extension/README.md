@@ -9,6 +9,6 @@ A extensão aplica a política de envio e captura prompts e respostas observados
 3. Entre pelo popup com a conta interna do Harness, solicite o vínculo da instalação e aguarde aprovação da Governança.
 4. Leia e confirme o aviso de privacidade, habilite a captura e recarregue as abas do ChatGPT e do Claude.
 
-O endpoint local padrão é `http://127.0.0.1:18080`. Para outro ambiente, altere `src/background/config.js` e a permissão correspondente em `manifest.json`. Preserve a chave pública do manifesto, que mantém o ID de extensão autorizado pelo gateway.
+O endpoint publicado é `https://app.castelotecnologia.com.br`. Para desenvolvimento local, altere `src/background/config.js` e a permissão correspondente em `manifest.json`. Preserve a chave pública do manifesto, que mantém o ID de extensão autorizado pelo gateway. A sessão da extensão renova automaticamente enquanto houver uso; após 90 dias sem uso, será necessário entrar novamente.
 
 No ChatGPT, a extensão também registra metadados técnicos do stream. No Claude, a conclusão da resposta é estimada quando o texto renderizado fica estável e o controle de interrupção some. A captura reflete o conteúdo observável no navegador e não comprova que o provedor recebeu ou processou todos os dados.

@@ -15,7 +15,7 @@ const promptHash = 'a'.repeat(64);
 
 function captureReadyData() {
   return {installationId: '00000000-0000-4000-8000-000000000098', enabled: true,
-    privacyAcceptance: {version: '2026-10-28.2', subject: 'SYN-1', accepted_at: new Date().toISOString()},
+    privacyAcceptance: {version: '2026-11-02.2', subject: 'SYN-1', accepted_at: new Date().toISOString()},
     authSession: {access_token: 'synthetic-access-token', employee_code: 'SYN-1',
       expires_at: Math.floor(Date.now() / 1000) + 3600},
     machineAssignment: {person_name: 'Pessoa Sintética', employee_id: 'SYN-1',
@@ -79,7 +79,7 @@ test('stores the first ChatGPT prompt while its conversation URL is unknown', as
   let submitted;
   const {send} = worker({localData: {
     installationId: '00000000-0000-4000-8000-000000000098', enabled: true,
-    privacyAcceptance: {version: '2026-10-28.2', subject: 'SYN-1', accepted_at: new Date().toISOString()},
+    privacyAcceptance: {version: '2026-11-02.2', subject: 'SYN-1', accepted_at: new Date().toISOString()},
     authSession: {access_token: 'synthetic-access-token', employee_code: 'SYN-1',
       expires_at: Math.floor(Date.now() / 1000) + 3600},
     machineAssignment: {person_name: 'Pessoa Sintética', employee_id: 'SYN-1',
@@ -97,7 +97,7 @@ test('stores the first ChatGPT prompt while its conversation URL is unknown', as
     adapter_version: '0.4.6', observed_at: new Date().toISOString()
   }}, {tab: {id: 1}, frameId: 0, url: 'https://chatgpt.com/'});
 
-  assert.equal(result.ok, true);
+  assert.equal(result.ok, true, result.error);
   assert.deepEqual(submitted.conversation, {capture_status: 'unknown',
     reason: 'ID da conversa indisponível no momento do envio'});
 });
@@ -177,4 +177,22 @@ test('reports each capture readiness requirement without exposing credentials', 
   assert.equal(decision.auth_session_valid, true);
   assert.equal(decision.machine_assignment_complete, true);
   assert.equal(decision.capture_allowed, false);
+});
+
+test('renews an active extension session without turning capture off', async () => {
+  const data = captureReadyData();
+  data.authSession.expires_at = Math.floor(Date.now() / 1000) + 24 * 60 * 60;
+  const extended = Math.floor(Date.now() / 1000) + 90 * 24 * 60 * 60;
+  let renewals = 0;
+  const {send, local} = worker({localData: data, fetchImpl: async url => {
+    assert.match(url, /\/api\/auth\/extension\/renew$/);
+    renewals++;
+    return {ok: true, status: 200, json: async () => ({expires_at: extended})};
+  }});
+  const result = await send({type: 'blocker_health', mainActive: true, blocked: false,
+    synchronized: true, machineAssigned: true, authExpired: false, mainBlocked: true});
+  assert.equal(result.ok, true, result.error);
+  assert.equal(local.authSession.expires_at, extended);
+  assert.equal(local.enabled, true);
+  assert.equal(renewals, 1);
 });

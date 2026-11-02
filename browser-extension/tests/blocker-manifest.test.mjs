@@ -2,10 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 
-test('o pacote limita a injeção ao ChatGPT, ao Claude e à API local do Harness', async () => {
+test('o pacote limita a injeção ao ChatGPT, ao Claude e à API do Harness', async () => {
   const manifest = JSON.parse(await readFile(new URL('../manifest.json', import.meta.url)));
   assert.equal(manifest.manifest_version, 3);
-  assert.deepEqual(manifest.host_permissions, ['https://chatgpt.com/*', 'https://claude.ai/*', 'http://127.0.0.1:18080/*']);
+  assert.deepEqual(manifest.host_permissions, ['https://chatgpt.com/*', 'https://claude.ai/*', 'https://app.castelotecnologia.com.br/*']);
   assert.equal(manifest.version, '0.6.0');
   assert.deepEqual(manifest.permissions, ['storage', 'tabs', 'alarms']);
   assert.deepEqual(manifest.content_scripts.map(script => [script.world, script.run_at]), [
@@ -28,7 +28,7 @@ test('o pacote limita a injeção ao ChatGPT, ao Claude e à API local do Harnes
   const worker = await readFile(new URL('../src/background/service-worker.js', import.meta.url), 'utf8');
   assert.match(worker, /!validConversationObservation\(item\.conversation, sender\.url\)/);
   await readFile(new URL('../src/background/capture-validation.js', import.meta.url));
-  assert.match(worker, /'http:\/\/127\.0\.0\.1:18080'/);
+  assert.match(await readFile(new URL('../src/background/config.js', import.meta.url), 'utf8'), /https:\/\/app\.castelotecnologia\.com\.br/);
   assert.match(worker, /import \{CONFIG\} from '\.\/config\.js'/);
   assert.match(worker, /X-Machine-Signature/);
   assert.match(worker, /device_installation_id: installationId/);

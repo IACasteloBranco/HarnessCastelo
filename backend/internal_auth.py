@@ -13,6 +13,7 @@ from sqlalchemy import delete, func, select
 from backend.database import Department, Employee, InternalSession, Organization, session_factory
 
 SESSION_DURATION = timedelta(hours=8)
+EXTENSION_SESSION_DURATION = timedelta(days=90)
 LOCK_DURATION = timedelta(minutes=15)
 
 
@@ -148,7 +149,7 @@ async def disable_employee(employee_code: str) -> None:
         await session.execute(delete(InternalSession).where(InternalSession.employee_id == employee.id))
 
 
-async def login(employee_code: str, password: str) -> tuple[str, bool] | None:
+async def login(employee_code: str, password: str, *, extension: bool = False) -> tuple[str, bool] | None:
     if not employee_code or len(employee_code) > 128 or len(password) > 1024:
         return None
     now = datetime.now(timezone.utc)
@@ -167,9 +168,27 @@ async def login(employee_code: str, password: str) -> tuple[str, bool] | None:
         token = secrets.token_urlsafe(32)
         session.add(InternalSession(
             token_hash=_token_hash(token), employee_id=employee.id,
-            created_at=now, expires_at=now + SESSION_DURATION,
+            created_at=now, expires_at=now + (EXTENSION_SESSION_DURATION if extension else SESSION_DURATION),
         ))
         return token, employee.must_change_password
+
+
+async def renew_extension_session(token: str) -> datetime | None:
+    now = datetime.now(timezone.utc)
+    async with session_factory()() as session, session.begin():
+        current = await session.scalar(select(InternalSession).where(
+            InternalSession.token_hash == _token_hash(token), InternalSession.expires_at > now
+        ).with_for_update())
+        # shortcut: session duration distinguishes extension tokens until sessions gain a kind column.
+        if current is None or current.expires_at - current.created_at <= SESSION_DURATION:
+            return None
+        employee = await session.scalar(select(Employee).where(
+            Employee.id == current.employee_id, Employee.disabled.is_(False)
+        ))
+        if employee is None or employee.must_change_password:
+            return None
+        current.expires_at = now + EXTENSION_SESSION_DURATION
+        return current.expires_at
 
 
 async def resolve_session(token: str | None) -> EmployeeInfo | None:

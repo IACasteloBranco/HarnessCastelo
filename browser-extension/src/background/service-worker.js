@@ -10,11 +10,13 @@ const PLATFORM_BY_ORIGIN = new Map([
   [CLAUDE_ORIGIN, 'claude_web']
 ]);
 const BLOCKER_PROTOCOL_VERSION = 1; // Bump only for incompatible blocker-message changes.
-const PRIVACY_NOTICE_VERSION = '2026-10-28.2';
+const PRIVACY_NOTICE_VERSION = '2026-11-02.2';
 const LOCAL_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 const policyPorts = new Set();
 const policyPortProtocols = new WeakMap();
 let localHistoryWrites = Promise.resolve();
+let renewal = null;
+let lastRenewalAttempt = 0;
 const ready = (async () => {
   await chrome.storage.local.setAccessLevel({accessLevel: 'TRUSTED_CONTEXTS'});
   await chrome.storage.session.setAccessLevel({accessLevel: 'TRUSTED_CONTEXTS'});
@@ -36,8 +38,29 @@ function cloudConfigured() {
 
 async function credentials() {
   const {authSession} = await chrome.storage.local.get('authSession');
-  return authSession?.access_token && Number.isSafeInteger(authSession.expires_at) &&
-    authSession.expires_at * 1000 > Date.now() ? authSession : null;
+  if (!authSession?.access_token || !Number.isSafeInteger(authSession.expires_at) ||
+      authSession.expires_at * 1000 <= Date.now()) return null;
+  if (authSession.expires_at * 1000 - Date.now() > 30 * 24 * 60 * 60 * 1000) return authSession;
+  if (Date.now() - lastRenewalAttempt < 5 * 60 * 1000) return authSession;
+  if (!renewal) renewal = (async () => {
+    lastRenewalAttempt = Date.now();
+    const response = await fetch(`${API}/api/auth/extension/renew`, {
+      method: 'POST', headers: {Authorization: `Bearer ${authSession.access_token}`},
+      signal: AbortSignal.timeout(5_000)
+    });
+    if (response.status === 401) {
+      await chrome.storage.local.remove('authSession');
+      await chrome.storage.session.set({authProblem: 'Sessão revogada. Entre novamente.'});
+      return null;
+    }
+    if (!response.ok) return authSession;
+    const {expires_at} = await response.json();
+    if (!Number.isSafeInteger(expires_at) || expires_at * 1000 <= Date.now()) return authSession;
+    const updated = {...authSession, expires_at};
+    await chrome.storage.local.set({authSession: updated});
+    return updated;
+  })().catch(() => authSession).finally(() => { renewal = null; });
+  return renewal;
 }
 
 async function captureReadiness() {
@@ -64,7 +87,7 @@ async function captureAllowed() {
   return (await captureReadiness()).capture_allowed;
 }
 
-async function closeSession(reason, revoke = true) {
+async function closeSession(reason, revoke = true, disableCapture = false) {
   const {authSession} = await chrome.storage.local.get('authSession');
   if (revoke && authSession?.access_token) {
     await fetch(`${API}/api/auth/extension/logout`, {
@@ -75,13 +98,14 @@ async function closeSession(reason, revoke = true) {
   await chrome.storage.local.remove('authSession');
   await chrome.storage.session.remove(['machineAssignment', 'machineInfo']);
   await chrome.storage.session.set({authProblem: reason});
-  await chrome.storage.local.set({enabled: false});
+  if (disableCapture) await chrome.storage.local.set({enabled: false});
   await broadcastPolicy();
   await updateProbeConfig(false);
 }
 
 async function internalLogin(employee_code, password) {
   if (!cloudConfigured()) throw new Error('Configure a URL do servidor Harness.');
+  const {authSession} = await chrome.storage.local.get('authSession');
   await closeSession('Novo login iniciado.', false);
   const response = await fetch(`${API}/api/auth/extension/login`, {method: 'POST', signal: AbortSignal.timeout(10_000),
     headers: {'Content-Type': 'application/json'},
@@ -98,6 +122,8 @@ async function internalLogin(employee_code, password) {
       !Number.isSafeInteger(data.expires_at) || data.expires_at * 1000 <= Date.now() ||
       data.employee_code !== employee_code) throw new Error('Sessão inválida recebida do Harness.');
   await chrome.storage.local.set({authSession: data});
+  if (authSession?.employee_code && authSession.employee_code !== data.employee_code)
+    await chrome.storage.local.set({enabled: false});
   await chrome.storage.session.remove('authProblem');
   await broadcastPolicy();
   return {employee_code: data.employee_code, expires_at: data.expires_at,
@@ -266,21 +292,14 @@ async function status() {
       identity = await credentials();
     }
   }
-  const fullyAssigned = Boolean(machineAssignment?.person_name && machineAssignment?.employee_id &&
-    machineAssignment?.department_code && machineAssignment?.key_matches === true &&
-    machineAssignment.subject_bound === true);
   const {privacyAcceptance = null} = await chrome.storage.local.get('privacyAcceptance');
   const privacySubject = identity?.employee_code;
   const privacyAccepted = Boolean(privacySubject && privacyAcceptance?.version === PRIVACY_NOTICE_VERSION &&
     privacyAcceptance.subject === privacySubject && Number.isFinite(Date.parse(privacyAcceptance.accepted_at)));
-  if (config.enabled === true && (!identity || !fullyAssigned || !privacyAccepted)) {
-    config.enabled = false;
-    await chrome.storage.local.set({enabled: false});
-    await updateProbeConfig(false);
-  }
   await broadcastPolicy();
   const {authProblem = null} = await chrome.storage.session.get('authProblem');
-  return {enabled: config.enabled === true && Boolean(identity) && fullyAssigned,
+  await updateProbeConfig((await captureReadiness()).capture_allowed);
+  return {enabled: config.enabled === true,
     configured: cloudConfigured(), cloud: true, authenticated: Boolean(identity),
     employeeCode: identity?.employee_code || null, expiresAt: identity?.expires_at || null,
     authProblem, installationId, machineAssignment, machineInfo,
@@ -393,7 +412,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       return account;
     }
     if (popup && message.type === 'logout') {
-      await closeSession('Você saiu do Harness.');
+      await closeSession('Você saiu do Harness.', true, true);
       return {signedOut: true};
     }
     if (popup && message.type === 'save') {
@@ -668,9 +687,9 @@ chrome.runtime.onConnect.addListener(port => {
         protocolVersion: BLOCKER_PROTOCOL_VERSION, protocolCompatible: true,
         machineAssigned: await captureAllowed(), authExpiresAt:
           (await credentials())?.expires_at * 1000 || 0});
+      await updateProbeConfig(await captureAllowed());
     } catch {
       await chrome.storage.session.set({machineAssignment: null});
-      await chrome.storage.local.set({enabled: false});
       await broadcastPolicy();
       await updateProbeConfig(false);
       try { port.postMessage({type: 'block_policy', blocked: false, machineAssigned: false,

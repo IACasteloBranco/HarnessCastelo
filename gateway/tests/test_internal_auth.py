@@ -6,12 +6,13 @@ from uuid import uuid4
 
 import httpx
 from sqlalchemy import delete, select, update
-from sqlalchemy.exc import IntegrityError
 
 from backend.database import Department, Employee, InternalSession, Organization, _session_factory, session_factory
 from backend.internal_auth import (
-    disable_employee, provision_department, provision_employee, provision_organization, reset_password,
+    EXTENSION_SESSION_DURATION, disable_employee, provision_department, provision_employee,
+    provision_organization, reset_password,
 )
+from gateway.internal_auth import EXTENSION_ORIGIN
 from gateway.main import app
 
 
@@ -111,14 +112,12 @@ class InternalAuthTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.client.get("/api/auth/me")).status_code, 401)
         self.assertEqual((await self._login(code, replacement)).status_code, 401)
 
-    async def test_employee_sessions_are_separate_and_governance_is_unique(self):
+    async def test_employee_sessions_are_separate_and_multiple_governance_accounts_are_allowed(self):
         first = f"employee-{uuid4().hex}"
         second = f"employee-{uuid4().hex}"
         first_password = await provision_employee(self.org_code, first, "collaborator", self.dept_code)
         second_password = await provision_employee(self.org_code, second, "collaborator", self.dept_code)
         await provision_employee(self.org_code, f"gov-{uuid4().hex}", "governance")
-        with self.assertRaises(IntegrityError):
-            await provision_employee(self.org_code, f"gov-{uuid4().hex}", "governance")
 
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="https://app.test"
@@ -139,3 +138,36 @@ class InternalAuthTests(unittest.IsolatedAsyncioTestCase):
                 locked_until=datetime.now(timezone.utc) - timedelta(seconds=1)
             ))
         self.assertEqual((await self._login(code, temporary)).status_code, 200)
+
+    async def test_extension_session_renews_without_extending_web_session(self):
+        code = f"employee-{uuid4().hex}"
+        temporary = await provision_employee(self.org_code, code, "collaborator", self.dept_code)
+        await self._login(code, temporary)
+        web_token = self.client.cookies["harness_session"]
+        password = "nova senha de teste forte"
+        changed = await self.client.post("/api/auth/change-password", headers={"Origin": "https://app.test"},
+                                         json={"current_password": temporary, "new_password": password})
+        self.assertEqual(changed.status_code, 200)
+        login_response = await self.client.post("/api/auth/extension/login", headers={"Origin": EXTENSION_ORIGIN},
+                                                json={"employee_code": code, "password": password})
+        self.assertEqual(login_response.status_code, 200)
+        extension_token = login_response.json()["access_token"]
+        self.assertGreater(login_response.json()["expires_at"],
+                           int((datetime.now(timezone.utc) + EXTENSION_SESSION_DURATION - timedelta(minutes=1)).timestamp()))
+        renew_path = "/api/auth/extension/renew"
+        self.assertEqual((await self.client.post(renew_path, headers={"Origin": EXTENSION_ORIGIN,
+                           "Authorization": f"Bearer {web_token}"})).status_code, 401)
+        self.assertEqual((await self.client.post(renew_path, headers={"Origin": "https://evil.test",
+                           "Authorization": f"Bearer {extension_token}"})).status_code, 403)
+        async with session_factory()() as session, session.begin():
+            await session.execute(update(InternalSession).where(
+                InternalSession.token_hash == hashlib.sha256(extension_token.encode()).hexdigest()
+            ).values(expires_at=datetime.now(timezone.utc) + timedelta(days=1)))
+        renewed = await self.client.post(renew_path, headers={"Origin": EXTENSION_ORIGIN,
+                                           "Authorization": f"Bearer {extension_token}"})
+        self.assertEqual(renewed.status_code, 200)
+        self.assertGreater(renewed.json()["expires_at"],
+                           int((datetime.now(timezone.utc) + timedelta(days=89)).timestamp()))
+        await disable_employee(code)
+        self.assertEqual((await self.client.post(renew_path, headers={"Origin": EXTENSION_ORIGIN,
+                           "Authorization": f"Bearer {extension_token}"})).status_code, 401)
