@@ -6,7 +6,7 @@ test('o pacote limita a injeção ao ChatGPT, ao Claude e à API do Harness', as
   const manifest = JSON.parse(await readFile(new URL('../manifest.json', import.meta.url)));
   assert.equal(manifest.manifest_version, 3);
   assert.deepEqual(manifest.host_permissions, ['https://chatgpt.com/*', 'https://claude.ai/*', 'https://app.castelotecnologia.com.br/*']);
-  assert.equal(manifest.version, '0.6.0');
+  assert.equal(manifest.version, '0.6.1');
   assert.deepEqual(manifest.permissions, ['storage', 'tabs', 'alarms']);
   assert.deepEqual(manifest.content_scripts.map(script => [script.world, script.run_at]), [
     ['MAIN', 'document_start'], ['MAIN', 'document_start'],
