@@ -131,6 +131,25 @@ class CaptureGovernanceTests(unittest.IsolatedAsyncioTestCase):
                      "synthetic response", "complete", timestamp, timestamp),
                 )
 
+    async def test_governance_employee_can_be_assigned_to_department_for_capture(self):
+        code = f"governance-{uuid4().hex}"
+        await provision_employee(self.org, code, "governance", self.department)
+
+        with connect(get_settings()) as db:
+            row = db.execute(
+                "SELECT employee_id, department_code, active FROM machine_assignment_employees WHERE employee_id = ?",
+                (code,),
+            ).fetchone()
+
+        if row is None:
+            self.fail("governance employee missing from capture assignment directory")
+        self.assertEqual((row["employee_id"], row["department_code"], row["active"]),
+                         (code, self.department, 1))
+        with connect(get_settings()) as db:
+            self.assertIsNone(db.execute(
+                "SELECT employee_id FROM employees WHERE employee_id = ?", (code,),
+            ).fetchone())
+
     async def asyncTearDown(self):
         for client in getattr(self, "clients", {}).values():
             await client.aclose()

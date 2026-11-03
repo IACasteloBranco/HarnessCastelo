@@ -96,8 +96,6 @@ async def provision_employee(
         raise ValueError("invalid role")
     if role in {"collaborator", "auditor"} and not department_code:
         raise ValueError("collaborator or auditor requires a department")
-    if role == "governance" and department_code:
-        raise ValueError("governance account has no department")
     if department_code:
         department_code = _code(department_code, 64)
     password = _temporary_password()

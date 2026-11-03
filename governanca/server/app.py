@@ -84,6 +84,10 @@ async def health():
 
 
 if __name__ == "__main__":
+    import asyncio
+    import sys
     import uvicorn
 
-    uvicorn.run("governanca.server.app:app", host="127.0.0.1", port=18081)
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    uvicorn.run("governanca.server.app:app", host="127.0.0.1", port=18081, loop="none")
