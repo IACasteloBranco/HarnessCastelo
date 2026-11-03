@@ -44,7 +44,7 @@ _PATTERNS = {
 _DDDS = set("11 12 13 14 15 16 17 18 19 21 22 24 27 28 31 32 33 34 35 37 38 41 42 43 44 45 46 47 48 49 51 53 54 55 61 62 63 64 65 66 67 68 69 71 73 74 75 77 79 81 82 83 84 85 86 87 88 89 91 92 93 94 95 96 97 98 99".split())
 
 
-def _valid_document(value: str, category: Category) -> bool:
+def valid_document(value: str, category: Category) -> bool:
     value = re.sub(r"[./-]", "", value).upper()
     if len(set(value)) == 1:
         return False
@@ -64,7 +64,7 @@ def detect(text: str) -> tuple[Finding, ...]:
     for category, pattern in _PATTERNS.items():
         for match in pattern.finditer(text):
             value = match.group()
-            if category in (Category.CPF, Category.CNPJ) and not _valid_document(value, category):
+            if category in (Category.CPF, Category.CNPJ) and not valid_document(value, category):
                 continue
             if category == Category.PHONE:
                 national = re.sub(r"\D", "", value)
@@ -76,13 +76,19 @@ def detect(text: str) -> tuple[Finding, ...]:
     return tuple(sorted(findings, key=lambda item: (item.start, item.end, item.category.value)))
 
 
-def inspect(text: str, policy: Mapping[Category, Action], *, policy_version: str) -> Decision:
+def inspect(text: str, policy: Mapping[Category, Action], *, policy_version: str,
+            additional_findings: tuple[Finding, ...] = ()) -> Decision:
     """Apply a complete explicit policy. A blocked decision never returns sendable text."""
     if set(policy) != set(Category) or any(not isinstance(action, Action) for action in policy.values()):
         raise ValueError("Policy must specify an Action for every Category")
     if not policy_version.strip():
         raise ValueError("Policy version is required")
-    findings = detect(text)
+    if any(not isinstance(item, Finding) or not isinstance(item.category, Category)
+           or item.start < 0 or item.start >= item.end
+           or item.end > len(text) for item in additional_findings):
+        raise ValueError("Additional findings must be valid text ranges")
+    findings = tuple(sorted(set(detect(text) + additional_findings),
+                            key=lambda item: (item.start, item.end, item.category.value)))
     if any(policy[item.category] == Action.BLOCK for item in findings):
         return Decision(Action.BLOCK, None, findings, policy_version)
     # Prefer complete email/document spans over phone-shaped substrings.

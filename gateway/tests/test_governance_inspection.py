@@ -1,10 +1,14 @@
 import unittest
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import httpx
 from fastapi import FastAPI
 
 from backend.internal_auth import EmployeeInfo
+from governanca.server.data_protection import Category, Finding
+from governanca.server.sensitive_data_protection import InspectionUnavailable
+from gateway import internal_auth
 from gateway.internal_auth import EXTENSION_ORIGIN, extension_employee, router
 
 
@@ -16,9 +20,13 @@ class GovernanceInspectionTests(unittest.IsolatedAsyncioTestCase):
             uuid4(), "synthetic", "org", "dept", "collaborator", False
         )
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app), base_url="https://app.test")
+        self.inspection = patch.object(internal_auth, "inspect_sensitive_data", new_callable=AsyncMock,
+                                       return_value=())
+        self.remote_inspection = self.inspection.start()
 
     async def asyncTearDown(self):
         await self.client.aclose()
+        self.inspection.stop()
 
     async def test_masks_personal_data_and_allows_cnpj(self):
         response = await self.client.post("/api/auth/extension/inspect", headers={"Origin": EXTENSION_ORIGIN}, json={
@@ -47,6 +55,23 @@ class GovernanceInspectionTests(unittest.IsolatedAsyncioTestCase):
             json={"text": "sem dados"})).status_code, 403)
         self.assertEqual((await self.client.post(path, headers={"Origin": EXTENSION_ORIGIN},
             json={"text": "x" * 100_001})).status_code, 422)
+
+    async def test_merges_remote_findings_and_preserves_unicode_offsets(self):
+        text = "Olá 😀, contato ana@example.invalid"
+        start = text.index("ana@example.invalid")
+        self.remote_inspection.return_value = (Finding(Category.EMAIL, start, len(text)),)
+        response = await self.client.post("/api/auth/extension/inspect",
+            headers={"Origin": EXTENSION_ORIGIN}, json={"text": text})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["text"], "Olá 😀, contato [EMAIL_1]")
+        self.assertEqual(self.remote_inspection.await_args.args, (text,))
+
+    async def test_remote_failure_fails_closed(self):
+        self.remote_inspection.side_effect = InspectionUnavailable("synthetic failure")
+        response = await self.client.post("/api/auth/extension/inspect",
+            headers={"Origin": EXTENSION_ORIGIN}, json={"text": "contato ana@example.invalid"})
+        self.assertEqual(response.status_code, 503)
+        self.assertNotIn("ana@example.invalid", response.text)
 
 
 if __name__ == "__main__":

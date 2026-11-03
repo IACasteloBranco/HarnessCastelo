@@ -1,6 +1,6 @@
 import unittest
 
-from governanca.server.data_protection import Action, Category, detect, inspect
+from governanca.server.data_protection import Action, Category, Finding, detect, inspect
 
 
 class DataProtectionTests(unittest.TestCase):
@@ -71,6 +71,9 @@ class DataProtectionTests(unittest.TestCase):
             inspect("", self.policy(), policy_version=" ")
         with self.assertRaises(ValueError):
             inspect("", dict.fromkeys(Category, "mask"), policy_version="1")
+        with self.assertRaises(ValueError):
+            inspect("abc", self.policy(), policy_version="1",
+                    additional_findings=(Finding(Category.EMAIL, 0, 4),))
 
 
 if __name__ == "__main__":

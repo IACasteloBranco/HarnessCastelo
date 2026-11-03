@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from backend.internal_auth import (EmployeeInfo, EXTENSION_SESSION_DURATION, SESSION_DURATION,
                                    change_password, login, logout, renew_extension_session, resolve_session)
 from governanca.server.data_protection import Action, Category, inspect as inspect_sensitive_text
+from governanca.server.sensitive_data_protection import InspectionUnavailable, inspect_sensitive_data
 
 router = APIRouter(prefix="/api/auth", tags=["internal-auth"])
 COOKIE_NAME = "harness_session"
@@ -123,7 +124,12 @@ async def extension_inspect_route(body: SensitiveTextBody, request: Request,
         raise HTTPException(403, "invalid extension origin")
     policy = {category: Action.MASK for category in Category}
     policy[Category.CNPJ] = Action.ALLOW
-    decision = inspect_sensitive_text(body.text, policy, policy_version="governanca-1")
+    try:
+        remote_findings = await inspect_sensitive_data(body.text)
+    except InspectionUnavailable as exc:
+        raise HTTPException(503, "Sensitive data inspection is unavailable") from exc
+    decision = inspect_sensitive_text(body.text, policy, policy_version="governanca-1",
+                                      additional_findings=remote_findings)
     return {
         "action": decision.action.value,
         "text": decision.text if decision.action == Action.MASK else None,
