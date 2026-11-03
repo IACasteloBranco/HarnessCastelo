@@ -99,7 +99,7 @@ def _extract(name: str, data: bytes) -> list[tuple[int | None, str]]:
 async def _manager(session, employee_id: UUID) -> Employee:
     employee = await session.get(Employee, employee_id)
     if (employee is None or employee.disabled or employee.must_change_password
-            or not has_governance_access(employee.role, employee.can_govern)):
+            or not has_governance_access(employee.role)):
         raise KnowledgeForbidden
     return employee
 
@@ -199,7 +199,7 @@ async def document_for_employee(employee_id: UUID, document_id: UUID) -> tuple[s
         document = await session.get(DepartmentDocument, document_id)
         if (employee is None or employee.disabled or employee.must_change_password or document is None
                 or document.organization_id != employee.organization_id
-                or not (has_governance_access(employee.role, employee.can_govern)
+                or not (has_governance_access(employee.role)
                         or document.department_id == employee.department_id)):
             raise KnowledgeNotFound
         return document.name, document.mime_type, _fernet().decrypt(document.ciphertext)
@@ -212,7 +212,7 @@ async def search_department(employee_id: UUID, query: str) -> dict:
     async with session_factory()() as session:
         employee = await session.get(Employee, employee_id)
         if (employee is None or employee.disabled or employee.must_change_password
-                or employee.role != "collaborator" or employee.department_id is None):
+                or employee.role not in {"collaborator", "auditor"} or employee.department_id is None):
             raise KnowledgeForbidden
     try:
         vector = (await asyncio.to_thread(_embed, [query]))[0]
@@ -223,7 +223,7 @@ async def search_department(employee_id: UUID, query: str) -> dict:
         current = await session.scalar(select(Employee).where(
             Employee.id == employee_id).with_for_update(read=True))
         if (current is None or current.disabled or current.must_change_password
-                or current.role != "collaborator" or current.department_id is None):
+                or current.role not in {"collaborator", "auditor"} or current.department_id is None):
             raise KnowledgeForbidden
         rows = (await session.execute(
             select(DepartmentDocument, DepartmentDocumentChunk,

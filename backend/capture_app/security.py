@@ -37,28 +37,29 @@ def require_machine_viewer(
 def require_operator_token(
     employee: Annotated[EmployeeInfo, Depends(require_capture_token)],
 ) -> dict:
-    if not has_governance_access(employee.role, employee.can_govern):
+    if not has_governance_access(employee.role):
         raise HTTPException(status_code=403, detail="Governance access required")
-    return {"organization_code": employee.organization_code, "department_code": employee.department_code}
+    return {"organization_code": employee.organization_code, "department_code": None}
 
 def require_content_viewer(
     request: Request,
     employee: EmployeeInfo = Depends(require_capture_token),
     settings: Settings = Depends(get_settings),
 ) -> dict:
-    if not has_governance_access(employee.role, employee.can_govern):
+    if not has_governance_access(employee.role):
         with connect(settings) as db:
             route = request.scope["route"].path
             record_privacy_audit(db, "content_read_denied", employee.code,
                                  f"{request.method} {route}", 0)
         raise HTTPException(status_code=403, detail="Governance access required")
     return {"actor_sub": employee.code, "actor_id": employee.employee_id,
-            "organization_code": employee.organization_code, "department_code": employee.department_code}
+            "organization_code": employee.organization_code, "department_code": None}
 
 
 def require_analytics_operator(
     employee: Annotated[EmployeeInfo, Depends(require_capture_token)],
 ) -> dict:
-    if not has_governance_access(employee.role, employee.can_govern):
-        raise HTTPException(status_code=403, detail="Governance access required")
-    return {"organization_code": employee.organization_code, "department_code": employee.department_code}
+    if employee.role not in {"auditor", "governance"}:
+        raise HTTPException(status_code=403, detail="Audit access required")
+    return {"organization_code": employee.organization_code, "department_code": None,
+            "role": employee.role}

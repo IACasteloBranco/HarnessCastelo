@@ -16,11 +16,12 @@ from openpyxl import load_workbook
 from sqlalchemy import delete, event, select
 
 from backend.database import (Account, AlertOutbox, ChatArtifact, ChatAttachment, ClientKey, ContextNote, Conversation, CredentialRecord, DailyFinding, DailyUsage, Department, DepartmentDocument, Project,
-                              Employee, EmployeeCredential, GovernanceAccess, PromptFinding,
+                              Employee, EmployeeCredential, GovernanceAccess, GovernanceInvestigation, PromptFinding,
                               InternalSession, Organization, Run, RunEvent, _session_factory,
                               session_factory)
 from backend.internal_auth import EmployeeInfo, provision_department, provision_employee, provision_organization
 from backend.knowledge import KnowledgeForbidden, search_department, upload_document
+from backend.department_analysis import AnalysisForbidden, department_samples, notify_possible_incident
 from backend.chat import (CHAT_CAPABILITIES, ChatConflict, admit_chat, claim_context_source,
                           release_context_source, save_generated_profile)
 from backend.artifacts import build_artifact, preview_table
@@ -67,7 +68,7 @@ class TranscriptionRouteTests(unittest.IsolatedAsyncioTestCase):
     async def test_uploaded_audio_requires_access_and_returns_text(self):
         application = FastAPI()
         application.include_router(chat_router)
-        employee = EmployeeInfo(uuid4(), "TEST", "ORG", None, "collaborator", False, False)
+        employee = EmployeeInfo(uuid4(), "TEST", "ORG", None, "collaborator", False)
         async def employee_override():
             return employee
         async def run_inline(function, *args):
@@ -83,7 +84,7 @@ class TranscriptionRouteTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual((await client.post("/api/chat/transcriptions", content=audio, headers={"X-Audio-Filename": "recado.wav"})).status_code, 403)
                 self.assertEqual((await client.post("/api/chat/transcriptions", content=audio, headers={**ORIGIN, "X-Audio-Filename": "recado.txt"})).status_code, 422)
                 self.assertEqual((await client.post("/api/chat/transcriptions", content=b"", headers=headers)).status_code, 422)
-                employee = EmployeeInfo(uuid4(), "GOV", "ORG", None, "governance", False, True)
+                employee = EmployeeInfo(uuid4(), "GOV", "ORG", None, "governance", False)
                 self.assertEqual((await client.post("/api/chat/transcriptions", content=audio, headers=headers)).status_code, 200)
 
 
@@ -91,7 +92,7 @@ class AttachmentPreviewTests(unittest.IsolatedAsyncioTestCase):
     async def test_preview_returns_safe_text_table_image_and_unsupported_status(self):
         application = FastAPI()
         application.include_router(chat_router)
-        employee = EmployeeInfo(uuid4(), "TEST", "ORG", None, "collaborator", False, False)
+        employee = EmployeeInfo(uuid4(), "TEST", "ORG", None, "collaborator", False)
         async def employee_override():
             return employee
         application.dependency_overrides[current_employee] = employee_override
@@ -162,6 +163,8 @@ class ChatTests(unittest.IsolatedAsyncioTestCase):
             await session.execute(delete(ContextNote).where(ContextNote.employee_id.in_(employee_ids)))
             await session.execute(delete(GovernanceAccess).where(
                 GovernanceAccess.actor_employee_id.in_(employee_ids)))
+            await session.execute(delete(GovernanceInvestigation).where(
+                GovernanceInvestigation.organization_id == org_id))
             await session.execute(delete(Run).where(Run.credential_id == self.credential))
             await session.execute(delete(ClientKey).where(ClientKey.credential_id == self.credential))
             await session.execute(delete(Conversation).where(Conversation.employee_id.in_(employee_ids)))
@@ -179,6 +182,32 @@ class ChatTests(unittest.IsolatedAsyncioTestCase):
     def _body(self, text, message_id=None):
         return {"client_message_id": str(message_id or uuid4()), "credential_id": self.credential,
                 "model": "test-model", "text": text}
+
+    async def _approved_investigation(self, subject_code: str) -> str:
+        approver_code = f"approver-{uuid4().hex}"
+        password = await provision_employee(self.org, approver_code, "governance")
+        async with AsyncClient(transport=httpx.ASGITransport(app=app), base_url="https://app.test") as approver:
+            self.assertEqual((await approver.post("/api/auth/login", json={
+                "employee_code": approver_code, "password": password}, headers=ORIGIN)).status_code, 200)
+            self.assertEqual((await approver.post("/api/auth/change-password", json={
+                "current_password": password, "new_password": "new secure password 123"},
+                headers=ORIGIN)).status_code, 200)
+            requested = await self.clients[2].post("/api/governance/investigations", headers=ORIGIN,
+                json={"purpose": "Investigar possível uso indevido e orientar o departamento",
+                      "viewers": [self.gov]})
+            self.assertEqual(requested.status_code, 200, requested.text)
+            case_id = requested.json()["id"]
+            self.assertEqual((await self.clients[2].post(
+                f"/api/governance/investigations/{case_id}/decision/approve",
+                headers=ORIGIN)).status_code, 403)
+            approved = await approver.post(
+                f"/api/governance/investigations/{case_id}/decision/approve", headers=ORIGIN)
+            self.assertEqual(approved.status_code, 200, approved.text)
+            bound = await self.clients[2].post(
+                f"/api/governance/investigations/{case_id}/subject", headers=ORIGIN,
+                json={"employee_code": subject_code})
+            self.assertEqual(bound.status_code, 200, bound.text)
+            return case_id
 
     async def test_governance_account_can_chat_with_own_history(self):
         await assign_credential(self.credential, self.gov)
@@ -313,23 +342,89 @@ class ChatTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(run.error_code, "capture_error")
         self.assertEqual(count, [])
 
-    async def test_collaborator_can_use_governance_when_granted(self):
+    async def test_auditor_can_read_aggregates_without_governance_content(self):
         async with session_factory()() as session, session.begin():
             employee = await session.scalar(select(Employee).where(Employee.code == self.first))
-            employee.can_govern = True
+            employee.role = "auditor"
 
         me = (await self.clients[0].get("/api/auth/me")).json()
-        self.assertEqual(me["role"], "collaborator")
-        self.assertTrue(me["can_govern"])
+        self.assertEqual(me["role"], "auditor")
+        self.assertFalse(me["can_govern"])
         self.assertEqual((await self.clients[0].get("/api/chat/history")).status_code, 200)
-        self.assertEqual((await self.clients[0].get("/api/governance/runs")).status_code, 200)
-        self.assertEqual((await self.clients[0].get("/api/governance/findings")).status_code, 200)
+        today = datetime.now(timezone.utc).date()
+        self.assertEqual((await self.clients[0].get(
+            f"/api/governance/reports/daily?start={today}&end={today}")).status_code, 200)
+        self.assertEqual((await self.clients[0].get("/api/governance/runs")).status_code, 403)
+        self.assertEqual((await self.clients[0].get("/api/governance/findings")).status_code, 403)
         self.assertEqual((await self.clients[1].get("/api/governance/runs")).status_code, 403)
 
         async with session_factory()() as session, session.begin():
             employee = await session.scalar(select(Employee).where(Employee.code == self.first))
-            employee.can_govern = False
+            employee.role = "collaborator"
         self.assertEqual((await self.clients[0].get("/api/governance/runs")).status_code, 403)
+
+    async def test_department_analysis_reads_only_its_requested_department(self):
+        third_code = f"third-{uuid4().hex}"
+        other_dept = f"other-dept-{uuid4().hex}"
+        other_code = f"other-{uuid4().hex}"
+        await provision_employee(self.org, third_code, "collaborator", self.dept)
+        await provision_department(self.org, other_dept, "Other department")
+        await provision_employee(self.org, other_code, "collaborator", other_dept)
+        await assign_credential(self.credential, third_code)
+        await assign_credential(self.credential, other_code)
+        async with session_factory()() as session, session.begin():
+            employees = {item.code: item for item in (await session.scalars(select(Employee).where(
+                Employee.code.in_((self.first, self.second, third_code, other_code))))).all()}
+            employees[self.first].role = "auditor"
+            employees[third_code].must_change_password = False
+            employees[other_code].must_change_password = False
+        for index, code in enumerate((self.first, self.second, third_code, self.first, self.second)):
+            await admit_employee(employees[code].id, self.credential, RequestRecord(
+                "POST", "responses", json.dumps({"input": [{"role": "user", "content": f"Fiscal {index}"}]}).encode()),
+                origin="api")
+        await admit_employee(employees[other_code].id, self.credential, RequestRecord(
+            "POST", "responses", b'{"input":[{"role":"user","content":"Secret from other department"}]}'),
+            origin="api")
+        samples = await department_samples(employees[self.first].id, self.dept, 30)
+        self.assertEqual(len(samples), 5)
+        self.assertNotIn("Secret from other department", " ".join(text for _, text in samples))
+        with self.assertRaises(AnalysisForbidden):
+            await department_samples(employees[self.second].id, self.dept, 30)
+
+    async def test_investigation_cannot_switch_subject_or_outlive_approval(self):
+        case_id = await self._approved_investigation(self.first)
+        switched = await self.clients[2].post(
+            f"/api/governance/investigations/{case_id}/subject", headers=ORIGIN,
+            json={"employee_code": self.second})
+        self.assertEqual(switched.status_code, 409)
+        async with session_factory()() as session, session.begin():
+            case = await session.get(GovernanceInvestigation, UUID(case_id))
+            case.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        async with session_factory()() as session:
+            subject_id = await session.scalar(select(Employee.id).where(Employee.code == self.first))
+        run = await admit_employee(subject_id, self.credential,
+                                   RequestRecord("POST", "responses", b'{"input":"test"}'), origin="api")
+        denied = await self.clients[2].get(f"/api/governance/runs/{run.run_id}",
+                                           params={"investigation_id": case_id})
+        self.assertEqual(denied.status_code, 403)
+
+    async def test_department_alert_stores_no_sample_text_and_reaches_outbox(self):
+        await assign_credential(self.credential, self.gov)
+        async with session_factory()() as session:
+            actor_id = await session.scalar(select(Employee.id).where(Employee.code == self.gov))
+        audit = {"model": "gpt-6-luna", "question": "Quais dificuldades aparecem?",
+                 "department": self.dept, "sample_count": 5}
+        run = await admit_employee(actor_id, self.credential,
+                                   RequestRecord("POST", "responses", json.dumps(audit).encode()),
+                                   origin="department_analysis")
+        await notify_possible_incident(run.run_id)
+        async with session_factory()() as session:
+            stored = await session.get(Run, run.run_id)
+            self.assertEqual(stored.request_json, audit)
+            self.assertNotIn("Pergunta:", stored.request_body)
+        claimed = await _claim_due()
+        self.assertEqual(len(claimed), 1)
+        self.assertEqual((claimed[0].run_id, claimed[0].department_code), (run.run_id, self.dept))
 
     async def _send(self, client, body, upstream):
         with patch("gateway.chat.get_valid_token", return_value="access"), patch(
@@ -508,8 +603,10 @@ class ChatTests(unittest.IsolatedAsyncioTestCase):
         listed = (await self.clients[2].get("/api/governance/runs")).json()["runs"]
         profile_runs = [item for item in listed if item["source"] == "Perfil automático"]
         self.assertEqual(len(profile_runs), 3)
+        case_id = await self._approved_investigation(self.first)
         detail = (await self.clients[2].get(
-            f"/api/governance/runs/{profile_runs[0]['run_id']}")).json()
+            f"/api/governance/runs/{profile_runs[0]['run_id']}",
+            params={"investigation_id": case_id})).json()
         self.assertEqual(detail["source"], "Perfil automático")
         self.assertTrue(detail["is_internal"])
         self.assertIn("current_profile", detail["prompt"])
@@ -769,20 +866,19 @@ class ChatTests(unittest.IsolatedAsyncioTestCase):
         governance = (await self.clients[2].get("/api/governance/runs")).json()
         visible_ids = {item["run_id"] for item in governance["runs"]}
         self.assertIn(str(first_run), visible_ids)
-        self.assertIn(str(legacy.run_id), visible_ids)
+        self.assertNotIn(str(legacy.run_id), visible_ids)
         chat_run = next(item for item in governance["runs"] if item["run_id"] == str(first_run))
         self.assertEqual(chat_run["source"], "Chat do Maximus")
-        self.assertEqual(next(item for item in governance["runs"]
-                              if item["run_id"] == str(legacy.run_id))["source"], "API")
         self.assertIsInstance(chat_run["duration_ms"], int)
-        detail = await self.clients[2].get(f"/api/governance/runs/{first_run}")
+        case_id = await self._approved_investigation(self.first)
+        detail = await self.clients[2].get(f"/api/governance/runs/{first_run}",
+                                            params={"investigation_id": case_id})
         self.assertEqual(detail.status_code, 200)
         self.assertEqual(detail.json()["employee_code"], self.first)
         self.assertEqual(detail.json()["request"]["input"][-1]["content"], "Olá")
-        old_detail = await self.clients[2].get(f"/api/governance/runs/{legacy.run_id}")
-        self.assertEqual(old_detail.status_code, 200)
-        self.assertIsNone(old_detail.json()["employee_id"])
-        self.assertEqual(old_detail.json()["prompt"], "legacy")
+        old_detail = await self.clients[2].get(f"/api/governance/runs/{legacy.run_id}",
+                                                params={"investigation_id": case_id})
+        self.assertEqual(old_detail.status_code, 404)
         async with session_factory()() as session:
             audit = await session.scalar(select(GovernanceAccess).where(GovernanceAccess.run_id == first_run))
             self.assertEqual(audit.action, "read")
@@ -922,8 +1018,10 @@ class ChatTests(unittest.IsolatedAsyncioTestCase):
             f"/api/chat/runs/{first.headers['x-run-id']}")).status_code, 404)
         self.assertEqual((await self.clients[0].get(
             "/api/chat/conversations?q=Impostos")).json()["conversations"], [])
+        case_id = await self._approved_investigation(self.first)
         self.assertEqual((await self.clients[2].get(
-            f"/api/governance/runs/{first.headers['x-run-id']}")).status_code, 200)
+            f"/api/governance/runs/{first.headers['x-run-id']}",
+            params={"investigation_id": case_id})).status_code, 200)
         self.assertEqual((await self.clients[0].get(
             "/api/chat/history")).json()["conversation_id"], second_id)
 
@@ -1012,8 +1110,11 @@ class ChatTests(unittest.IsolatedAsyncioTestCase):
             alert = await session.get(AlertOutbox, UUID(alerts[0]["alert_id"]))
             self.assertEqual((alert.status, alert.attempts), ("sent", 2))
 
-        self.assertEqual((await self.clients[0].get(f"/api/governance/runs/{run_id}/export")).status_code, 403)
-        exported = await self.clients[2].get(f"/api/governance/runs/{run_id}/export")
+        case_id = await self._approved_investigation(self.first)
+        self.assertEqual((await self.clients[0].get(f"/api/governance/runs/{run_id}/export",
+                                                    params={"investigation_id": case_id})).status_code, 403)
+        exported = await self.clients[2].get(f"/api/governance/runs/{run_id}/export",
+                                              params={"investigation_id": case_id})
         self.assertEqual(exported.status_code, 200)
         self.assertIn("attachment", exported.headers["content-disposition"])
         self.assertIn(secret, exported.text)
@@ -1078,7 +1179,9 @@ class ChatTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([row for row in after["usage"] if row["department"] == self.dept], own_usage)
         self.assertEqual([row for row in after["findings"] if row["department"] == self.dept], own_findings)
         self.assertEqual((await self.clients[0].get(f"/api/chat/runs/{old[0].run_id}")).status_code, 404)
-        self.assertEqual((await self.clients[2].get(f"/api/governance/runs/{old[0].run_id}")).status_code, 404)
+        case_id = await self._approved_investigation(self.first)
+        self.assertEqual((await self.clients[2].get(f"/api/governance/runs/{old[0].run_id}",
+                                                   params={"investigation_id": case_id})).status_code, 404)
         self.assertEqual((await self.clients[2].get(report_url.replace("/daily?", "/daily/export?"))).status_code, 200)
         async with session_factory()() as session:
             self.assertIsNone(await session.get(RunEvent, (old[0].run_id, 0)))

@@ -98,7 +98,7 @@ def analytics_summary(
         streams = _event_count(db, "stream_captures", scope["organization_code"], scope["department_code"], start, end)
         artifacts = _event_count(db, "artifact_metadata", scope["organization_code"], scope["department_code"], start, end)
 
-    employees = [dict(row) for row in rows]
+    employees = [{key: value for key, value in dict(row).items() if key != "person_name"} for row in rows]
     departments: dict[str, dict] = defaultdict(lambda: {
         "interactions": 0,
         "responses": 0,
@@ -127,13 +127,15 @@ def analytics_summary(
         "stream_captures": streams,
         "artifact_metadata": artifacts,
     }
-    return {
+    result = {
         "period": {"from": iso(start) if start else None, "to": iso(end) if end else None},
         "department_scope": scope["department_code"],
         "totals": totals,
         "by_department": by_department,
-        "by_employee": employees,
     }
+    if scope["role"] == "governance":
+        result["by_employee"] = employees
+    return result
 
 
 @router.get("/interactions")
@@ -193,7 +195,6 @@ def search_interactions(
         "items": [{
             "interaction_id": row["interaction_id"],
             "employee_id": row["employee_id"],
-            "person_name": row["person_name"],
             "department_code": row["department_code"],
             "department_name": row["department_name"],
             "platform": row["platform"],

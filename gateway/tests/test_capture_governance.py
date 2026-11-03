@@ -15,7 +15,8 @@ from backend.capture_app.db import connect, initialize, iso
 from backend.capture_app.integration import CAPTURE_PATHS, capture_app
 from backend.capture_app.main import app as legacy_capture_app
 from backend.capture_app.settings import get_settings
-from backend.database import Department, Employee, InternalSession, Organization, _session_factory, session_factory
+from backend.database import (Department, Employee, GovernanceInvestigation, InternalSession,
+                              Organization, _session_factory, session_factory)
 from backend.internal_auth import provision_department, provision_employee, provision_organization
 from gateway.main import app
 
@@ -54,6 +55,7 @@ class CaptureGovernanceTests(unittest.IsolatedAsyncioTestCase):
         self.department = f"dept-{uuid4().hex}"
         self.other_department = f"dept-{uuid4().hex}"
         self.viewer = f"viewer-{uuid4().hex}"
+        self.approver = f"approver-{uuid4().hex}"
         self.denied = f"denied-{uuid4().hex}"
         self.other_employee = f"other-{uuid4().hex}"
         self.interaction_ids = [str(uuid4()) for _ in range(4)]
@@ -61,6 +63,7 @@ class CaptureGovernanceTests(unittest.IsolatedAsyncioTestCase):
         await provision_department(self.org, self.department, "Synthetic department")
         await provision_department(self.org, self.other_department, "Other synthetic department")
         self.viewer_password = await provision_employee(self.org, self.viewer, "collaborator", self.department)
+        self.approver_password = await provision_employee(self.org, self.approver, "governance")
         self.denied_password = await provision_employee(self.org, self.denied, "collaborator", self.department)
         self.other_password = await provision_employee(self.org, self.other_employee, "collaborator", self.other_department)
         async with session_factory()() as session, session.begin():
@@ -68,13 +71,14 @@ class CaptureGovernanceTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(viewer)
             if viewer is None:
                 self.fail("synthetic governance viewer was not provisioned")
-            viewer.can_govern = True
+            viewer.role = "governance"
         self.clients = {
             name: httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="https://app.test")
-            for name in ("anonymous", "viewer", "denied")
+            for name in ("anonymous", "viewer", "approver", "denied")
         }
         for name, code, password in (
             ("viewer", self.viewer, self.viewer_password),
+            ("approver", self.approver, self.approver_password),
             ("denied", self.denied, self.denied_password),
         ):
             client = self.clients[name]
@@ -127,6 +131,8 @@ class CaptureGovernanceTests(unittest.IsolatedAsyncioTestCase):
             async with session_factory()() as session, session.begin():
                 org_id = await session.scalar(select(Organization.id).where(Organization.code == self.org))
                 employee_ids = select(Employee.id).where(Employee.organization_id == org_id)
+                await session.execute(delete(GovernanceInvestigation).where(
+                    GovernanceInvestigation.organization_id == org_id))
                 await session.execute(delete(InternalSession).where(InternalSession.employee_id.in_(employee_ids)))
                 await session.execute(delete(Employee).where(Employee.organization_id == org_id))
                 await session.execute(delete(Department).where(Department.organization_id == org_id))
@@ -149,10 +155,20 @@ class CaptureGovernanceTests(unittest.IsolatedAsyncioTestCase):
         denied = await self.clients["denied"].get(
             "/api/capture/v1/admin/analytics/interactions")
         self.assertEqual(denied.status_code, 403)
+        async with session_factory()() as session, session.begin():
+            auditor = await session.scalar(select(Employee).where(Employee.code == self.denied))
+            auditor.role = "auditor"
+        auditor_summary = await self.clients["denied"].get("/api/capture/v1/admin/analytics/summary")
+        self.assertEqual(auditor_summary.status_code, 200, auditor_summary.text)
+        self.assertNotIn("by_employee", auditor_summary.json())
+        self.assertEqual((await self.clients["denied"].get(
+            "/api/capture/v1/admin/analytics/interactions")).status_code, 403)
 
         client = self.clients["viewer"]
         summary = await client.get("/api/capture/v1/admin/analytics/summary")
         self.assertEqual(summary.status_code, 200, summary.text)
+        self.assertEqual({row["department_code"] for row in summary.json()["by_department"]},
+                         {self.department, self.other_department})
         params = {
             "employee_id": self.viewer,
             "platform": "chatgpt_web",
@@ -182,18 +198,33 @@ class CaptureGovernanceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(list_audit)
         self.assertEqual((list_audit["event_type"], list_audit["record_count"]), ("content_read", 1))
 
-        detail = await client.get(f"/api/capture/v1/interactions/{self.interaction_ids[0]}")
+        requested = await client.post("/api/governance/investigations", headers={"Origin": "https://app.test"},
+                                      json={"purpose": "Apurar uma suspeita sobre o uso da extensão",
+                                            "viewers": [self.viewer]})
+        self.assertEqual(requested.status_code, 200, requested.text)
+        case_id = requested.json()["id"]
+        approved = await self.clients["approver"].post(
+            f"/api/governance/investigations/{case_id}/decision/approve",
+            headers={"Origin": "https://app.test"})
+        self.assertEqual(approved.status_code, 200, approved.text)
+        bound = await client.post(f"/api/governance/investigations/{case_id}/subject",
+                                  headers={"Origin": "https://app.test"},
+                                  json={"employee_code": self.viewer})
+        self.assertEqual(bound.status_code, 200, bound.text)
+        detail = await client.get(f"/api/capture/v1/interactions/{self.interaction_ids[0]}",
+                                  params={"investigation_id": case_id})
         self.assertEqual(detail.status_code, 200, detail.text)
         self.assertEqual(detail.json()["prompt"]["text"], "synthetic prompt")
         self.assertEqual(detail.json()["responses"][0]["text"], "synthetic response")
-        out_of_scope = await client.get(f"/api/capture/v1/interactions/{self.interaction_ids[3]}")
-        self.assertEqual(out_of_scope.status_code, 404)
+        out_of_scope = await client.get(f"/api/capture/v1/interactions/{self.interaction_ids[3]}",
+                                        params={"investigation_id": case_id})
+        self.assertEqual(out_of_scope.status_code, 403)
 
         with connect(get_settings()) as db:
             audit = db.execute(
                 """SELECT event_type, action, record_count FROM privacy_audit
                    WHERE actor_id = ? AND action = ? ORDER BY audit_id DESC LIMIT 1""",
-                (self.viewer, "GET /v1/interactions/{interaction_id}"),
+                (self.viewer, f"GET /v1/interactions/{{interaction_id}} investigation={case_id}"),
             ).fetchone()
         self.assertIsNotNone(audit)
         self.assertEqual((audit["event_type"], audit["record_count"]), ("content_read", 1))

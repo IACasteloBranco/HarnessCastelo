@@ -205,7 +205,13 @@ async def _record_run(session, credential: CredentialRecord, request: RequestRec
         payload = json.loads(body_text) if body_text else None
     except json.JSONDecodeError:
         payload = None
-    if chat:
+    if origin == "department_analysis":
+        audit_payload = payload if isinstance(payload, dict) else {}
+        stored_payload = {"model": audit_payload.get("model"), "question": audit_payload.get("question"),
+                          "department": audit_payload.get("department"),
+                          "sample_count": audit_payload.get("sample_count")}
+        body_text = json.dumps(stored_payload, ensure_ascii=False)
+    elif chat:
         stored_payload = {"model": payload.get("model") if isinstance(payload, dict) else None,
                           "input": [{"role": "user", "content": chat.text}]}
         if chat.attachments:

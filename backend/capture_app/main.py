@@ -71,7 +71,7 @@ def recent_stream_captures(scope: dict = Depends(require_operator_token),
                            settings: Settings = Depends(get_settings)) -> dict:
     with connect(settings) as db:
         rows = db.execute(
-            """SELECT capture_id, device_installation_id, attributed_person, employee_id, department_code, machine_key_fingerprint,
+            """SELECT capture_id, device_installation_id, employee_id, department_code, machine_key_fingerprint,
                       platform, path, request_id, status_code, content_type, capture_status,
                       response_chars, bytes, chunks, frames, done_markers, protocol_done,
                       reader_done, reader_aborted_after_done, truncated, stream_elapsed_ms,
@@ -98,8 +98,8 @@ def recent_artifact_metadata(scope: dict = Depends(require_operator_token),
                              settings: Settings = Depends(get_settings)) -> dict:
     with connect(settings) as db:
         rows = db.execute(
-            """SELECT artifact_id, device_installation_id, attributed_person, employee_id, department_code, machine_key_fingerprint,
-                      platform, source, file_name, mime_type, size_bytes, conversation_id,
+            """SELECT artifact_id, device_installation_id, employee_id, department_code, machine_key_fingerprint,
+                      platform, source, mime_type, size_bytes, conversation_id,
                       conversation_context_source, size_source, observed_at, received_at
                FROM artifact_metadata
                WHERE employee_id IN (SELECT employee.code FROM public.employees AS employee
@@ -565,7 +565,8 @@ def create_artifact_metadata(
     "/v1/interactions/{interaction_id}",
     response_model=InteractionDetail,
 )
-def get_interaction(interaction_id: UUID, response: Response, viewer: dict = Depends(require_content_viewer),
+async def get_interaction(interaction_id: UUID, investigation_id: UUID, response: Response,
+                    viewer: dict = Depends(require_content_viewer),
                     settings: Settings = Depends(get_settings)) -> InteractionDetail:
     response.headers["Cache-Control"] = "no-store"
     with connect(settings) as db:
@@ -579,6 +580,11 @@ def get_interaction(interaction_id: UUID, response: Response, viewer: dict = Dep
                           viewer["department_code"], viewer["department_code"])).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="interaction not found")
+        from backend.investigations import InvestigationDenied, require_investigation_for_code
+        try:
+            await require_investigation_for_code(viewer["actor_id"], investigation_id, row["employee_id"])
+        except InvestigationDenied:
+            raise HTTPException(status_code=403, detail="approved investigation required")
         responses = db.execute(
             "SELECT client_event_id, text, capture_status, adapter_version, observed_at, received_at, generated_materials_json FROM responses WHERE interaction_id = ? ORDER BY received_at",
             (str(interaction_id),),
@@ -588,7 +594,7 @@ def get_interaction(interaction_id: UUID, response: Response, viewer: dict = Dep
             (str(interaction_id),),
         ).fetchall()
         record_privacy_audit(db, "content_read", viewer["actor_sub"],
-                             "GET /v1/interactions/{interaction_id}", 1)
+                             f"GET /v1/interactions/{{interaction_id}} investigation={investigation_id}", 1)
     return InteractionDetail(
         interaction_id=row["interaction_id"],
         client_event_id=row["client_event_id"],

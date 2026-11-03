@@ -123,7 +123,7 @@ def _initialize_postgres(db: Any) -> None:
                    employee.organization_id
             FROM public.employees AS employee
             JOIN public.departments AS department ON department.id = employee.department_id
-            WHERE employee.role = 'collaborator'""")
+            WHERE employee.role IN ('collaborator', 'auditor')""")
         db.execute("INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                    (SCHEMA_VERSION, iso(utc_now())))
         return
@@ -155,7 +155,7 @@ def _initialize_postgres(db: Any) -> None:
                    employee.organization_id
             FROM public.employees AS employee
             JOIN public.departments AS department ON department.id = employee.department_id
-            WHERE employee.role = 'collaborator'""",
+            WHERE employee.role IN ('collaborator', 'auditor')""",
         """CREATE TABLE interactions (
             interaction_id TEXT PRIMARY KEY, client_event_id TEXT NOT NULL UNIQUE, request_fingerprint TEXT NOT NULL,
             device_installation_id TEXT NOT NULL, platform TEXT NOT NULL, account_label TEXT, project_json TEXT NOT NULL,

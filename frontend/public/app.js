@@ -6,7 +6,11 @@ let sessionVersion = 0;
 let credentialsVersion = 0;
 let chatVersion = 0;
 const $ = id => document.getElementById(id);
-const markdown = window.markdownit({ html: false, linkify: true, breaks: true });
+const markdown = window.markdownit({ html: false, linkify: true, breaks: true }).use(window.texmath, {
+  engine: window.katex,
+  delimiters: "brackets",
+  katexOptions: { trust: false, throwOnError: false, macros: { "\\sen": "\\operatorname{sen}" } },
+});
 let selectedFiles = [];
 let audioBusy = false;
 let audioRecorder = null;
@@ -36,7 +40,7 @@ function setChatUserMenu(open) {
 
 function show(screen, focus = true) {
   const previous = state.screen;
-  const governanceLayout = screen === "governance" || (state.employee?.role === "governance" && ["home", "connect"].includes(screen));
+  const governanceLayout = screen === "governance" || (["auditor", "governance"].includes(state.employee?.role) && ["home", "connect"].includes(screen));
   if (previous === "chat" && screen !== "chat") stopRecording(true);
   state.screen = screen;
   setChatUserMenu(false);
@@ -46,19 +50,20 @@ function show(screen, focus = true) {
   document.querySelector(".shell").classList.toggle("governance-shell", governanceLayout);
   for (const [name, view] of Object.entries(views)) view.hidden = name !== screen;
   $("workspace-nav").hidden = !state.employee || state.employee.must_change_password || screen === "login" || screen === "password";
-  $("chat-nav").hidden = !["collaborator", "governance"].includes(state.employee?.role);
-  $("accounts-nav").hidden = !["collaborator", "governance"].includes(state.employee?.role);
-  $("governance-nav").hidden = !(state.employee?.role === "governance" || state.employee?.can_govern);
-  $("chat-sidebar-chat").hidden = !["collaborator", "governance"].includes(state.employee?.role);
+  $("chat-nav").hidden = !["collaborator", "auditor", "governance"].includes(state.employee?.role);
+  $("accounts-nav").hidden = !["collaborator", "auditor", "governance"].includes(state.employee?.role);
+  $("governance-nav").hidden = !["auditor", "governance"].includes(state.employee?.role);
+  $("chat-sidebar-chat").hidden = !["collaborator", "auditor", "governance"].includes(state.employee?.role);
   $("chat-sidebar-accounts").hidden = !governanceLayout;
-  $("chat-sidebar-governance").hidden = !(state.employee?.role === "governance" || state.employee?.can_govern);
+  $("chat-sidebar-governance").hidden = !["auditor", "governance"].includes(state.employee?.role);
   $("chat-sidebar-chat").classList.toggle("chat-side-current", screen === "chat");
   $("chat-sidebar-chat").setAttribute("aria-current", screen === "chat" ? "page" : "false");
   $("chat-sidebar-accounts").classList.toggle("chat-side-current", screen === "home" || screen === "connect");
   $("chat-sidebar-accounts").setAttribute("aria-current", ["home", "connect"].includes(screen) ? "page" : "false");
   $("chat-sidebar-governance").classList.toggle("chat-side-current", screen === "governance");
   $("chat-sidebar-governance").setAttribute("aria-current", screen === "governance" ? "page" : "false");
-  $("chat-menu-governance").hidden = !state.employee?.can_govern;
+  $("chat-menu-governance").hidden = !["auditor", "governance"].includes(state.employee?.role);
+  for (const tab of document.querySelectorAll("[data-governance-tab]")) tab.hidden = state.employee?.role === "auditor" && tab.dataset.governanceTab !== "overview";
   for (const [name, id] of [["chat", "chat-nav"], ["home", "accounts-nav"], ["governance", "governance-nav"]]) $(id).setAttribute("aria-current", screen === name ? "page" : "false");
   $("session-actions").hidden = !state.employee;
   $("employee-label").textContent = state.employee?.employee_code || "";
@@ -98,6 +103,7 @@ function clearSession() {
   state.connection = null;
   state.chat = { runs: [], pending: null, preview: null, busy: false, before: null, conversationId: null, projectId: null, listProjectId: null, title: null, conversations: [], search: "", listBefore: null };
   state.runDetailId = null;
+  state.investigationId = null;
   $("run-detail-content").textContent = "";
   $("run-detail").hidden = true;
   $("chat-text").value = "";
@@ -731,7 +737,7 @@ $("callback-form").addEventListener("submit", async event => {
 });
 
 async function enterWorkspace() {
-  if (state.employee.role === "governance") {
+  if (["auditor", "governance"].includes(state.employee.role)) {
     show("governance");
     await loadGovernance();
   } else {
@@ -1532,7 +1538,7 @@ function captureDate(value) {
 }
 
 async function loadCaptureInteractions() {
-  if ((state.employee?.role !== "governance" && !state.employee?.can_govern) || state.screen !== "governance") return;
+  if (state.employee?.role !== "governance" || state.screen !== "governance") return;
   const version = ++captureListVersion;
   clearCaptureDetail();
   const start = $("capture-start").value;
@@ -1562,7 +1568,7 @@ async function loadCaptureInteractions() {
     captureTotal = result.total || 0;
     const rows = (result.items || []).map(item => {
       const platformLabel = item.platform === "chatgpt_web" ? "ChatGPT" : "Claude";
-      const row = metadataRow(item.person_name || item.employee_id,
+      const row = metadataRow(item.employee_id,
         `${item.employee_id} · ${platformLabel} · ${captureDate(item.received_at)} · ${governanceLabel(item.status)}`);
       const button = document.createElement("button");
       button.className = "text-button";
@@ -1583,11 +1589,12 @@ async function loadCaptureInteractions() {
 }
 
 async function openCaptureDetail(interactionId) {
+  if (!state.investigationId) { status("Selecione uma investigação aprovada antes de abrir conteúdo.", true); return; }
   captureDetailId = interactionId;
   $("capture-detail").hidden = false;
   $("capture-detail-content").textContent = "Carregando captura…";
   try {
-    const detail = await api(`/api/capture/v1/interactions/${encodeURIComponent(interactionId)}`);
+    const detail = await api(`/api/capture/v1/interactions/${encodeURIComponent(interactionId)}?investigation_id=${encodeURIComponent(state.investigationId)}`);
     if (captureDetailId !== interactionId || state.screen !== "governance") return;
     const fields = [
       ["Colaborador", detail.attributed_person || detail.employee_id || "Não atribuído"],
@@ -1646,17 +1653,20 @@ async function loadMachineRequests() {
 }
 
 async function loadGovernance() {
-  if (state.employee?.role !== "governance" && !state.employee?.can_govern) return;
+  if (!["auditor", "governance"].includes(state.employee?.role)) return;
   const start = $("report-start").value;
   const end = $("report-end").value;
   if (!start || !end || start > end) { status("Escolha um período válido.", true); return; }
   const query = `start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`;
   try {
+    const governance = state.employee.role === "governance";
     const [report, runs, findings, alerts] = await Promise.all([
-      api(`/api/governance/reports/daily?${query}`), api("/api/governance/runs"),
-      api("/api/governance/findings"), api("/api/governance/alerts"),
+      api(`/api/governance/reports/daily?${query}`), governance ? api("/api/governance/runs") : { runs: [] },
+      governance ? api("/api/governance/findings") : { findings: [] },
+      governance ? api("/api/governance/alerts") : { alerts: [] },
     ]);
     if (state.screen !== "governance") return;
+    if (governance) loadInvestigations();
     const usage = report.usage || [];
     const categories = report.findings || [];
     const totalRuns = usage.reduce((sum, row) => sum + row.runs, 0);
@@ -1720,7 +1730,7 @@ async function loadGovernance() {
     const byCategory = new Map();
     for (const row of categories) byCategory.set(row.category, (byCategory.get(row.category) || 0) + row.count);
     fillRows("categories-list", [...byCategory].map(([category, count]) => metadataRow(governanceLabel(category), `${count} achados`)), "Sem achados no período.");
-    renderGovernanceRuns(runs.runs || [], false);
+    if (governance) renderGovernanceRuns(runs.runs || [], false);
     fillRows("governance-findings", (findings.findings || []).map(item => metadataRow(governanceLabel(item.category), `${governanceLabel(item.confidence)} · ${new Date(item.created_at).toLocaleString("pt-BR")}`, item.run_id)), "Sem achados recentes.");
     fillRows("governance-alerts", (alerts.alerts || []).map(item => metadataRow(`Alerta · ${governanceLabel(item.category)}`, governanceLabel(item.status), item.run_id)), "Sem alertas recentes.");
   } catch (error) { if (state.screen === "governance") status(error.message, true); }
@@ -1802,6 +1812,7 @@ function renderGovernanceRuns(runs, append) {
     const meta = document.createElement("small");
     const duration = run.duration_ms == null ? "Duração indisponível" : run.duration_ms < 1000 ? `${run.duration_ms} ms` : `${(run.duration_ms / 1000).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} s`;
     meta.textContent = `${new Date(run.started_at).toLocaleString("pt-BR")} · ${run.source || "Origem indisponível"} · ${duration}`;
+    meta.prepend(document.createTextNode(`${run.employee_code || "Não atribuído"} · ${run.department_code || "Sem departamento"} · `));
     row.append(title, meta);
     row.addEventListener("click", () => openRunDetail(run.run_id));
     target.append(row);
@@ -1838,7 +1849,8 @@ function renderRunDetail(detail) {
 }
 
 async function openRunDetail(runId) {
-  if (state.employee?.role !== "governance" && !state.employee?.can_govern) return;
+  if (state.employee?.role !== "governance") return;
+  if (!state.investigationId) { status("Selecione uma investigação aprovada antes de abrir conteúdo.", true); return; }
   state.runDetailId = runId;
   for (const row of document.querySelectorAll(".governance-run-row")) row.setAttribute("aria-pressed", String(row.dataset.runId === runId));
   $("run-detail-placeholder").hidden = true;
@@ -1846,7 +1858,7 @@ async function openRunDetail(runId) {
   $("run-detail-content").textContent = "Carregando detalhe…";
   if (window.innerWidth <= 900) $("run-detail").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth", block: "start" });
   try {
-    const detail = await api(`/api/governance/runs/${encodeURIComponent(runId)}`);
+    const detail = await api(`/api/governance/runs/${encodeURIComponent(runId)}?investigation_id=${encodeURIComponent(state.investigationId)}`);
     if (state.runDetailId === runId && state.screen === "governance") renderRunDetail(detail);
   } catch (error) { if (state.runDetailId === runId) $("run-detail-content").textContent = error.message; }
 }
@@ -1881,9 +1893,91 @@ $("runs-more").addEventListener("click", async () => {
 });
 $("run-detail-close").addEventListener("click", () => { state.runDetailId = null; $("run-detail-content").textContent = ""; $("run-detail").hidden = true; $("run-detail-placeholder").hidden = false; for (const row of document.querySelectorAll(".governance-run-row")) row.setAttribute("aria-pressed", "false"); });
 $("run-export").addEventListener("click", async () => {
-  if (!state.runDetailId) return;
-  try { await downloadJson(`/api/governance/runs/${encodeURIComponent(state.runDetailId)}/export`, `run-${state.runDetailId}.json`); }
+  if (!state.runDetailId || !state.investigationId) return;
+  try { await downloadJson(`/api/governance/runs/${encodeURIComponent(state.runDetailId)}/export?investigation_id=${encodeURIComponent(state.investigationId)}`, `run-${state.runDetailId}.json`); }
   catch (error) { status(error.message, true); }
+});
+
+async function loadInvestigations() {
+  if (state.employee?.role !== "governance") return;
+  try {
+    const result = await api("/api/governance/investigations");
+    if (state.screen !== "governance") return;
+    const target = $("investigations-list");
+    target.replaceChildren();
+    const cases = result.investigations || [];
+    if (!cases.length) target.textContent = "Nenhuma investigação solicitada.";
+    for (const item of cases) {
+      const row = metadataRow(item.purpose, `${item.status} · solicitante ${item.requested_by} · acesso ${item.viewers.join(", ")}`);
+      if (item.can_approve) for (const [label, decision] of [["Aprovar", "approve"], ["Rejeitar", "reject"]]) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "text-button";
+        button.textContent = label;
+        button.addEventListener("click", async () => {
+          try { await api(`/api/governance/investigations/${item.id}/decision/${decision}`, { method: "POST" }); await loadInvestigations(); }
+          catch (error) { status(error.message, true); }
+        });
+        row.append(button);
+      }
+      if (item.can_use) {
+        if (item.target_employee_code) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "text-button";
+          button.textContent = `Usar acesso para ${item.target_employee_code}`;
+          button.addEventListener("click", () => {
+            state.investigationId = item.id;
+            $("active-investigation").textContent = `Acesso ativo para ${item.target_employee_code} até ${new Date(item.expires_at).toLocaleString("pt-BR")}.`;
+          });
+          row.append(button);
+        } else {
+          const input = document.createElement("input");
+          input.maxLength = 128;
+          input.placeholder = "Código do colaborador";
+          input.setAttribute("aria-label", "Código do colaborador investigado");
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "text-button";
+          button.textContent = "Vincular colaborador";
+          button.addEventListener("click", async () => {
+            try {
+              await api(`/api/governance/investigations/${item.id}/subject`, {
+                method: "POST", body: JSON.stringify({ employee_code: input.value.trim() }),
+              });
+              state.investigationId = item.id;
+              await loadInvestigations();
+            } catch (error) { status(error.message, true); }
+          });
+          row.append(input, button);
+        }
+      }
+      target.append(row);
+    }
+    if (!cases.some(item => item.id === state.investigationId && item.can_use)) {
+      state.investigationId = null;
+      $("active-investigation").textContent = "Nenhum acesso excepcional ativo.";
+    } else {
+      const active = cases.find(item => item.id === state.investigationId);
+      $("active-investigation").textContent = `Acesso ativo para ${active.target_employee_code} até ${new Date(active.expires_at).toLocaleString("pt-BR")}.`;
+    }
+  } catch (error) { if (state.screen === "governance") status(error.message, true); }
+}
+
+$("investigation-form").addEventListener("submit", async event => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  setBusy(form, true);
+  try {
+    await api("/api/governance/investigations", { method: "POST", body: JSON.stringify({
+      purpose: $("investigation-purpose").value.trim(),
+      viewers: $("investigation-viewers").value.split(",").map(value => value.trim()).filter(Boolean),
+    }) });
+    form.reset();
+    await loadInvestigations();
+    status("Solicitação enviada para aprovação de outra pessoa da governança.");
+  } catch (error) { status(error.message, true); }
+  finally { setBusy(form, false); }
 });
 
 restore();

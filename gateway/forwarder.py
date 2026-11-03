@@ -46,7 +46,7 @@ def _disable_artifact_tool(payload: dict) -> dict:
 
 async def forward(request: Request, path: str, admitted: AdmittedRun, body: bytes,
                   browser_session: bool = False, access_token: str | None = None,
-                  knowledge_search=None) -> Response:
+                  knowledge_search=None, department_analysis=None) -> Response:
     global _ARTIFACT_TOOL_SUPPORTED
     credential = admitted.credential
     run_id = admitted.run_id
@@ -156,8 +156,9 @@ async def forward(request: Request, path: str, admitted: AdmittedRun, body: byte
     elif artifact_tool_requested and not artifact_tools_rejected and resp.status_code < 400:
         _ARTIFACT_TOOL_SUPPORTED = True
 
-    try_knowledge = (knowledge_search and path.startswith("responses") and resp.status_code < 400
-                     and isinstance(payload, dict) and payload.get("stream") is True)
+    try_tools = ((knowledge_search or department_analysis) and path.startswith("responses")
+                 and resp.status_code < 400 and isinstance(payload, dict)
+                 and payload.get("stream") is True)
 
     audit_log.info(
         "cred=%s user=%s type=%s path=%s status=%d latency=%.1fs",
@@ -187,7 +188,7 @@ async def forward(request: Request, path: str, admitted: AdmittedRun, body: byte
                 return
 
         heartbeat_task = asyncio.create_task(keep_alive())
-        search_available = try_knowledge
+        tools_available = try_tools
         decoder = EventStreamDecoder() if is_event_stream else None
         body_decoder = None if decoder else codecs.getincrementaldecoder("utf-8")("replace")
         next_ordinal = 0
@@ -251,33 +252,47 @@ async def forward(request: Request, path: str, admitted: AdmittedRun, body: byte
                     if body_text:
                         await capture([StreamEvent(0, "response.body", body_text)])
 
-                if not search_available:
+                if not tools_available:
                     break
-                search_available = False
+                tools_available = False
                 response_data = terminal_response if isinstance(terminal_response, dict) else {}
+                tool_handlers = {"search_department_knowledge": knowledge_search,
+                                 "analyze_department_interactions": department_analysis}
                 calls = [item for item in response_data.get("output", [])
                          if isinstance(item, dict) and item.get("type") == "function_call"
-                         and item.get("name") == "search_department_knowledge"]
+                         and item.get("name") in tool_handlers and tool_handlers[item["name"]]]
                 if len(calls) != 1:
                     break
                 try:
                     call = calls[0]
                     args = json.loads(call.get("arguments", "{}"))
-                    if set(args) != {"query"} or not isinstance(args["query"], str):
-                        raise ValueError("invalid knowledge tool arguments")
-                    result = await knowledge_search(args["query"])
-                    knowledge_sources = result.get("sources", [])
-                    await capture([StreamEvent(0, "maximus.knowledge_result", json.dumps({
-                        "call_id": call["call_id"], "output": result["output"],
-                        "sources": knowledge_sources,
+                    if call["name"] == "search_department_knowledge":
+                        if set(args) != {"query"} or not isinstance(args["query"], str):
+                            raise ValueError("invalid knowledge tool arguments")
+                        result = await knowledge_search(args["query"])
+                        knowledge_sources = result.get("sources", [])
+                        output = result["output"]
+                        event_type = "maximus.knowledge_result"
+                    else:
+                        if (set(args) != {"department_code", "question", "days"}
+                                or not isinstance(args["department_code"], str)
+                                or not isinstance(args["question"], str)
+                                or type(args["days"]) is not int or not 1 <= args["days"] <= 90):
+                            raise ValueError("invalid department analysis arguments")
+                        result = await department_analysis(args["department_code"], args["question"], args["days"])
+                        output = json.dumps(result, ensure_ascii=False)
+                        event_type = "maximus.department_analysis_result"
+                    await capture([StreamEvent(0, event_type, json.dumps({
+                        "call_id": call["call_id"], "output": output,
+                        "sources": knowledge_sources if call["name"] == "search_department_knowledge" else [],
                     }, ensure_ascii=False))])
                     next_payload = dict(payload)
                     next_payload["input"] = [*payload.get("input", []),
                                               *response_data.get("output", []),
                                               {"type": "function_call_output", "call_id": call["call_id"],
-                                               "output": result["output"]}]
+                                               "output": output}]
                     next_payload["tools"] = [tool for tool in payload.get("tools", [])
-                                              if tool.get("name") != "search_department_knowledge"]
+                                              if tool.get("name") != call["name"]]
                     next_payload.pop("tool_choice", None)
                     await resp.aclose()
                     next_request = client.build_request("POST", f"{CODEX_BACKEND}/{path}",
@@ -291,8 +306,8 @@ async def forward(request: Request, path: str, admitted: AdmittedRun, body: byte
                     decoder = EventStreamDecoder()
                     body_decoder = None
                 except Exception as exc:
-                    audit_log.warning("run=%s department knowledge lookup failed: %s", run_id, type(exc).__name__)
-                    yield await knowledge_failure("knowledge_tool_error")
+                    audit_log.warning("run=%s chat tool failed: %s", run_id, type(exc).__name__)
+                    yield await knowledge_failure("chat_tool_error")
                     break
             completed_transport = True
         except httpx.HTTPError as exc:

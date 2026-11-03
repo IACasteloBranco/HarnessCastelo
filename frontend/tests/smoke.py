@@ -33,7 +33,7 @@ with sync_playwright() as playwright:
             calls.append(path)
             if path == "auth/me":
                 return mock(route, {"employee_code": "COLAB001", "role": role,
-                                    "can_govern": role == "collaborator", "must_change_password": False})
+                                    "can_govern": role == "governance", "must_change_password": False})
             if path == "oauth/credentials":
                 return mock(route, [{"credential_id": "CONTA01", "connected": True, "can_connect": True}])
             if path == "chat/projects":
@@ -78,6 +78,8 @@ with sync_playwright() as playwright:
                     "Content-Type": "application/pdf", "Content-Disposition": "attachment; filename=maximus-teste.pdf"})
             if path.startswith("governance/reports/daily"):
                 return mock(route, {"usage": [{"day": "2026-10-25", "department": "CONTABIL", "runs": 3, "errors": 1, "latency_ms": 3000, "latency_samples": 2}], "findings": [{"day": "2026-10-25", "department": "CONTABIL", "category": "sensitive_data", "count": 1}]})
+            if path == "governance/departments":
+                return mock(route, {"departments": [{"code": "CONTABIL", "name": "Contabilidade"}]})
             if path == "governance/runs":
                 return mock(route, {"runs": [
                     {"run_id": "11111111-1111-4111-8111-111111111111", "outcome": "completed", "started_at": "2026-10-25T10:00:00Z", "source": "Chat do Maximus", "duration_ms": 2400},
@@ -87,6 +89,12 @@ with sync_playwright() as playwright:
                 return mock(route, {"findings": []})
             if path == "governance/alerts":
                 return mock(route, {"alerts": []})
+            if path == "governance/investigations":
+                return mock(route, {"investigations": [{"id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                    "purpose": "Investigar uso indevido declarado no teste", "status": "approved",
+                    "requested_by": "GOV001", "viewers": ["GOV001"], "can_approve": False,
+                    "can_use": True, "target_employee_code": "COLAB001",
+                    "expires_at": "2026-11-02T12:00:00Z"}]})
             if path.startswith("capture/v1/admin/analytics/interactions"):
                 return mock(route, {"items": [{"interaction_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
                     "employee_id": "COLAB001", "person_name": "Colaborador de teste", "platform": "chatgpt_web",
@@ -119,10 +127,7 @@ with sync_playwright() as playwright:
         page.goto(BASE)
         if role == "collaborator":
             page.get_by_role("heading", name="Como posso ajudar hoje?").wait_for()
-            page.locator("#chat-sidebar-governance").click()
-            page.get_by_role("heading", name="Visão de uso").wait_for()
-            page.locator("#chat-sidebar-chat").click()
-            page.get_by_role("heading", name="Como posso ajudar hoje?").wait_for()
+            assert not page.locator("#chat-sidebar-governance").is_visible()
             assert page.locator("#chat-side-user").is_visible()
             assert not page.locator("#chat-header-logout").is_visible()
             page.locator("#chat-side-user").click()
@@ -140,7 +145,7 @@ with sync_playwright() as playwright:
             assert page.locator("#chat-side-user").is_visible()
             page.locator("#chat-side-user").click()
             assert page.locator("#chat-sidebar-logout").is_visible()
-            assert page.locator("#chat-menu-governance").is_visible()
+            assert not page.locator("#chat-menu-governance").is_visible()
             page.keyboard.press("Escape")
             page.screenshot(path=str(Path(gettempdir()) / "maximus-chat-empty-mobile.png"), full_page=True)
             page.locator("#chat-add-menu summary").click()
@@ -221,6 +226,26 @@ with sync_playwright() as playwright:
               return result;
             }""")
             assert markup == {"heading": True, "item": True, "script": False, "escaped": True}
+            math = page.evaluate(r"""() => {
+              const bubble = chatBubble('assistant', String.raw`Derivada: \(\sen x\).
+
+\[
+\frac{d}{dx}\ln(x^2+1)=\frac{2x}{x^2+1}
+\]
+
+| Função | Derivada |
+| --- | --- |
+| \(x^n\) | \(nx^{n-1}\) |`);
+              const code = chatBubble('assistant', '```tex\n\\frac{1}{2}\n```');
+              return {formulas: bubble.querySelectorAll('.katex').length,
+                display: bubble.querySelectorAll('.katex-display').length,
+                tableFormulas: bubble.querySelectorAll('td .katex').length,
+                errors: bubble.querySelectorAll('.katex-error').length,
+                codeLiteral: code.querySelector('pre code')?.textContent.includes('\\frac{1}{2}'),
+                codeFormulas: code.querySelectorAll('.katex').length};
+            }""")
+            assert math == {"formulas": 4, "display": 1, "tableFormulas": 2, "errors": 0,
+                            "codeLiteral": True, "codeFormulas": 0}, math
             page.locator("#chat-new").click()
             page.locator("#chat-add-menu summary").click()
             assert page.get_by_role("button", name="Adicionar arquivos").is_visible()
@@ -270,6 +295,7 @@ with sync_playwright() as playwright:
             page.get_by_text("CONTABIL", exact=True).wait_for()
             assert not any(path.startswith("governance/runs/") for path in calls)
             page.get_by_role("button", name="Atividade", exact=True).click()
+            page.get_by_role("button", name="Usar acesso para COLAB001").click()
             page.locator("#governance-runs button").first.click()
             page.get_by_text("Esta leitura de conteúdo bruto foi registrada para auditoria.").wait_for()
             page.get_by_text("Abra a tela de relatórios.").wait_for()
@@ -281,13 +307,6 @@ with sync_playwright() as playwright:
             assert values[:2] == ["Chat do Maximus", "COLAB001"] and "/" in values[2]
             assert values[3:] == ["Como consultar o relatório?", "Abra a tela de relatórios."]
             assert not summary.lstrip().startswith("{")
-            page.locator("#governance-runs button").last.click()
-            page.get_by_text("Maximus (conta IA)").wait_for()
-            assert page.locator("#run-detail-content h3").all_text_contents() == [
-                "Origem", "Quem fez", "Horário", "Entrada", "Resposta"]
-            values = page.locator("#run-detail-content p").all_text_contents()
-            assert values[:2] == ["Perfil automático", "Maximus (conta IA)"]
-            assert values[3:] == ['{"message":"Olá"}', '{"profile":""}']
             page.get_by_role("button", name="Capturas", exact=True).click()
             page.get_by_role("heading", name="Capturas da extensão").wait_for()
             page.locator("#capture-employee").fill("COLAB001")
@@ -295,7 +314,7 @@ with sync_playwright() as playwright:
             page.locator("#capture-start").fill("2026-10-25")
             page.locator("#capture-end").fill("2026-10-25")
             page.locator("#capture-filter-form button[type=submit]").click()
-            page.get_by_text("Colaborador de teste", exact=True).wait_for()
+            page.locator("#capture-interactions").get_by_text("COLAB001", exact=True).first.wait_for()
             query = next(call for call in reversed(calls) if call.startswith("capture/v1/admin/analytics/interactions?"))
             assert "employee_id=COLAB001" in query and "platform=chatgpt_web" in query
             expected_start, expected_end = page.evaluate("""() => [
@@ -332,7 +351,7 @@ with sync_playwright() as playwright:
               api = originalApi;
               return $("capture-interactions").innerText;
             }""")
-            assert "Resultado novo" in race_result and "Resultado antigo" not in race_result
+            assert "new" in race_result and "old" not in race_result
             page.locator("#capture-filter-form button[type=submit]").click()
             assert not page.locator("#capture-detail").is_visible()
         page.screenshot(path=screenshot, full_page=True)

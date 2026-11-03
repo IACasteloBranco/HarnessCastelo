@@ -7,9 +7,8 @@ from uuid import UUID
 from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.dialects.postgresql import insert
 
-from backend.database import (DailyFinding, DailyUsage, Department, INTERNAL_RUN_ORIGINS,
+from backend.database import (DailyFinding, DailyUsage, Department, Employee, INTERNAL_RUN_ORIGINS,
                               PromptFinding, Run, session_factory)
-from backend.governance import _governance_actor
 
 LEGACY = "legacy"
 UNATTRIBUTED = "unattributed"
@@ -113,7 +112,10 @@ async def governance_report(actor_id: UUID, start: date, end: date) -> dict:
         raise ValueError("invalid report period")
     async with session_factory()() as session, session.begin():
         await session.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"))
-        actor = await _governance_actor(session, actor_id)
+        actor = await session.get(Employee, actor_id)
+        if (actor is None or actor.disabled or actor.must_change_password
+                or actor.role not in {"auditor", "governance"}):
+            raise PermissionError
         org = str(actor.organization_id)
         usage = defaultdict(lambda: [0, 0, 0, 0, 0, 0])
         findings = defaultdict(int)
