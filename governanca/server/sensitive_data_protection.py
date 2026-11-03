@@ -13,7 +13,35 @@ _INFO_TYPES = {
     "BRAZIL_CPF_NUMBER": Category.CPF,
     "EMAIL_ADDRESS": Category.EMAIL,
     "PHONE_NUMBER": Category.PHONE,
+    "PERSON_NAME": Category.PERSON_NAME,
+    "AGE": Category.AGE,
+    "GENDER": Category.GENDER,
+    "ETHNIC_GROUP": Category.ETHNIC_GROUP,
+    "MARITAL_STATUS": Category.MARITAL_STATUS,
+    "SEXUAL_ORIENTATION": Category.SEXUAL_ORIENTATION,
+    "MEDICAL_DATA": Category.MEDICAL_DATA,
+    "EMPLOYMENT_STATUS": Category.EMPLOYMENT_STATUS,
+    "IMMIGRATION_STATUS": Category.IMMIGRATION_STATUS,
+    "RELIGIOUS_TERM": Category.RELIGIOUS_TERM,
+    "POLITICAL_TERM": Category.POLITICAL_TERM,
 }
+_CONTEXTUAL_INFO_TYPES = tuple(name for name in _INFO_TYPES if name not in {
+    "BRAZIL_CPF_NUMBER", "EMAIL_ADDRESS", "PHONE_NUMBER",
+})
+# shortcut: uses explicit Portuguese context cues; extend this list with approved policy vocabulary.
+_CONTEXT_RULES = [{
+    "info_types": [{"name": name} for name in _CONTEXTUAL_INFO_TYPES],
+    "rules": [{"hotword_rule": {
+        "hotword_regex": {
+            "pattern": (
+                r"(?i)\b(?:nome|me chamo|sou|cliente|consumidor|titular|perfil|cadastro|"
+                r"paciente|colaborador|colaboradora)\b"
+            )
+        },
+        "proximity": {"window_before": 120, "window_after": 40},
+        "likelihood_adjustment": {"relative_likelihood": 1},
+    }}],
+}]
 
 
 class InspectionUnavailable(Exception):
@@ -40,6 +68,11 @@ async def inspect_sensitive_data(text: str) -> tuple[Finding, ...]:
                 "inspect_config": {
                     "info_types": [{"name": name} for name in _INFO_TYPES],
                     "min_likelihood": dlp_v2.Likelihood.POSSIBLE,
+                    "min_likelihood_per_info_type": [{
+                        "info_type": {"name": name},
+                        "min_likelihood": dlp_v2.Likelihood.LIKELY,
+                    } for name in _CONTEXTUAL_INFO_TYPES],
+                    "rule_set": _CONTEXT_RULES,
                     "include_quote": False,
                 },
                 "item": {"value": text},

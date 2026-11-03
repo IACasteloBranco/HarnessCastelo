@@ -128,7 +128,7 @@ async def extension_inspect_route(body: SensitiveTextBody, request: Request,
         remote_findings = await inspect_sensitive_data(body.text)
     except InspectionUnavailable as exc:
         raise HTTPException(503, "Sensitive data inspection is unavailable") from exc
-    decision = inspect_sensitive_text(body.text, policy, policy_version="governanca-1",
+    decision = inspect_sensitive_text(body.text, policy, policy_version="governanca-2",
                                       additional_findings=remote_findings)
     return {
         "action": decision.action.value,

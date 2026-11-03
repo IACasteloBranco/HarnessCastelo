@@ -284,7 +284,9 @@ async function inspectSensitiveText(text) {
   if (!['allow', 'mask', 'block'].includes(data.action) ||
       typeof data.requires_confirmation !== 'boolean' || typeof data.policy_version !== 'string' ||
       !Array.isArray(data.categories) || !data.categories.every(category =>
-        ['CPF', 'CNPJ', 'EMAIL', 'PHONE'].includes(category)) ||
+        ['CPF', 'CNPJ', 'EMAIL', 'PHONE', 'PERSON_NAME', 'AGE', 'GENDER', 'ETHNIC_GROUP',
+          'MARITAL_STATUS', 'SEXUAL_ORIENTATION', 'MEDICAL_DATA', 'EMPLOYMENT_STATUS',
+          'IMMIGRATION_STATUS', 'RELIGIOUS_TERM', 'POLITICAL_TERM'].includes(category)) ||
       (data.action === 'mask' && (typeof data.text !== 'string' || data.requires_confirmation !== true)) ||
       (data.action !== 'mask' && data.requires_confirmation))
     throw new Error('Resposta de inspeção inválida.');

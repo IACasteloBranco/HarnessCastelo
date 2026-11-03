@@ -35,7 +35,7 @@ class GovernanceInspectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {
             "action": "mask", "text": "CPF [CPF_1]; e-mail [EMAIL_1]; telefone [PHONE_1]; CNPJ 11.222.333/0001-81",
-            "requires_confirmation": True, "policy_version": "governanca-1",
+            "requires_confirmation": True, "policy_version": "governanca-2",
             "categories": ["CNPJ", "CPF", "EMAIL", "PHONE"],
         })
 
@@ -65,6 +65,23 @@ class GovernanceInspectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["text"], "Olá 😀, contato [EMAIL_1]")
         self.assertEqual(self.remote_inspection.await_args.args, (text,))
+
+    async def test_masks_contextual_person_name_from_remote_detector(self):
+        text = "Meu nome é Ana Silva"
+        self.remote_inspection.return_value = (Finding(Category.PERSON_NAME, 11, 20),)
+        response = await self.client.post("/api/auth/extension/inspect",
+            headers={"Origin": EXTENSION_ORIGIN}, json={"text": text})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["text"], "Meu nome é [PERSON_NAME_1]")
+        self.assertIn("PERSON_NAME", response.json()["categories"])
+
+    async def test_masks_sensitive_client_trait_from_remote_detector(self):
+        text = "Cliente com diabetes"
+        self.remote_inspection.return_value = (Finding(Category.MEDICAL_DATA, 12, 20),)
+        response = await self.client.post("/api/auth/extension/inspect",
+            headers={"Origin": EXTENSION_ORIGIN}, json={"text": text})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["text"], "Cliente com [MEDICAL_DATA_1]")
 
     async def test_remote_failure_fails_closed(self):
         self.remote_inspection.side_effect = InspectionUnavailable("synthetic failure")

@@ -12,6 +12,17 @@ class Category(str, Enum):
     CNPJ = "CNPJ"
     EMAIL = "EMAIL"
     PHONE = "PHONE"
+    PERSON_NAME = "PERSON_NAME"
+    AGE = "AGE"
+    GENDER = "GENDER"
+    ETHNIC_GROUP = "ETHNIC_GROUP"
+    MARITAL_STATUS = "MARITAL_STATUS"
+    SEXUAL_ORIENTATION = "SEXUAL_ORIENTATION"
+    MEDICAL_DATA = "MEDICAL_DATA"
+    EMPLOYMENT_STATUS = "EMPLOYMENT_STATUS"
+    IMMIGRATION_STATUS = "IMMIGRATION_STATUS"
+    RELIGIOUS_TERM = "RELIGIOUS_TERM"
+    POLITICAL_TERM = "POLITICAL_TERM"
 
 
 class Action(str, Enum):
@@ -93,6 +104,8 @@ def inspect(text: str, policy: Mapping[Category, Action], *, policy_version: str
         return Decision(Action.BLOCK, None, findings, policy_version)
     # Prefer complete email/document spans over phone-shaped substrings.
     priority = {category: index for index, category in enumerate(_PATTERNS)}
+    for category in Category:
+        priority.setdefault(category, len(priority))
     selected = []
     for item in sorted(findings, key=lambda item: (priority[item.category], item.start)):
         if policy[item.category] == Action.MASK and not any(

@@ -38,9 +38,46 @@ class SensitiveDataProtectionTests(unittest.IsolatedAsyncioTestCase):
         dlp_v2.types.InspectContentRequest(**request)
         self.assertEqual(request["parent"], "projects/synthetic-project/locations/southamerica-east1")
         self.assertEqual({item["name"] for item in request["inspect_config"]["info_types"]},
-                         {"BRAZIL_CPF_NUMBER", "EMAIL_ADDRESS", "PHONE_NUMBER"})
+                         {"BRAZIL_CPF_NUMBER", "EMAIL_ADDRESS", "PHONE_NUMBER", "PERSON_NAME",
+                          "AGE", "GENDER", "ETHNIC_GROUP", "MARITAL_STATUS", "SEXUAL_ORIENTATION",
+                          "MEDICAL_DATA", "EMPLOYMENT_STATUS", "IMMIGRATION_STATUS", "RELIGIOUS_TERM",
+                          "POLITICAL_TERM"})
+        self.assertEqual({item["info_type"]["name"] for item in
+                          request["inspect_config"]["min_likelihood_per_info_type"]}, {
+            "PERSON_NAME", "AGE", "GENDER", "ETHNIC_GROUP", "MARITAL_STATUS", "SEXUAL_ORIENTATION",
+            "MEDICAL_DATA", "EMPLOYMENT_STATUS", "IMMIGRATION_STATUS", "RELIGIOUS_TERM", "POLITICAL_TERM",
+        })
+        self.assertTrue(all(item["min_likelihood"] == dlp_v2.Likelihood.LIKELY for item in
+                            request["inspect_config"]["min_likelihood_per_info_type"]))
+        self.assertEqual(request["inspect_config"]["rule_set"][0]["rules"][0]["hotword_rule"][
+            "likelihood_adjustment"], {"relative_likelihood": 1})
         self.assertFalse(request["inspect_config"]["include_quote"])
         self.assertEqual(client.inspect_content.await_args.kwargs["timeout"], 8.0)
+
+    async def test_contextual_person_name_detector_uses_contextual_info_type(self):
+        response = dlp_v2.types.InspectContentResponse(result={"findings": [{
+            "info_type": {"name": "PERSON_NAME"},
+            "location": {"codepoint_range": {"start": 11, "end": 20}},
+        }]})
+        client = AsyncMock()
+        client.inspect_content.return_value = response
+        text = "Meu nome é Ana Silva"
+        with patch("governanca.server.sensitive_data_protection._client", return_value=client):
+            findings = await inspect_sensitive_data(text)
+
+        self.assertEqual(findings, (Finding(Category.PERSON_NAME, 11, 20),))
+
+    async def test_maps_sensitive_customer_trait_info_type(self):
+        response = dlp_v2.types.InspectContentResponse(result={"findings": [{
+            "info_type": {"name": "MEDICAL_DATA"},
+            "location": {"codepoint_range": {"start": 0, "end": 12}},
+        }]})
+        client = AsyncMock()
+        client.inspect_content.return_value = response
+        with patch("governanca.server.sensitive_data_protection._client", return_value=client):
+            findings = await inspect_sensitive_data("cliente diabético")
+
+        self.assertEqual(findings, (Finding(Category.MEDICAL_DATA, 0, 12),))
 
     async def test_rejects_remote_cpf_that_fails_local_checksum(self):
         text = "12345678900"
