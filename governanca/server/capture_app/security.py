@@ -63,3 +63,11 @@ def require_analytics_operator(
         raise HTTPException(status_code=403, detail="Audit access required")
     return {"organization_code": employee.organization_code, "department_code": None,
             "role": employee.role}
+
+
+def require_governance_analytics(
+    employee: Annotated[EmployeeInfo, Depends(require_capture_token)],
+) -> dict:
+    if employee.role != "governance":
+        raise HTTPException(status_code=403, detail="Governance access required")
+    return {"organization_code": employee.organization_code, "department_code": None}

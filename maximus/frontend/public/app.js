@@ -21,6 +21,7 @@ let captureOffset = 0;
 let captureTotal = 0;
 let captureDetailId = null;
 let captureListVersion = 0;
+let departmentAnalyticsVersion = 0;
 
 function confirmAction(title, message) {
   const dialog = $("confirm-dialog");
@@ -1498,10 +1499,65 @@ function selectGovernanceTab(tab) {
     void loadKnowledgeDepartments().catch(error => status(error.message, true));
   }
   if (tab === "captures") void loadCaptureInteractions();
+  if (tab === "department-analytics") void loadDepartmentAnalytics();
 }
 
 const governanceLabels = { sensitive_data: "Dados sensíveis", completed: "Concluído", complete: "Concluída", incomplete: "Incompleta", failed: "Falhou", interrupted: "Interrompido", running: "Em andamento", sent: "Enviado", pending: "Pendente", review: "Em revisão", high: "Alta", medium: "Média", low: "Baixa" };
 function governanceLabel(value) { return governanceLabels[value] || String(value || "—").replaceAll("_", " "); }
+
+async function loadDepartmentAnalytics() {
+  if (state.employee?.role !== "governance" || state.screen !== "governance") return;
+  const version = ++departmentAnalyticsVersion;
+  const start = $("report-start").value;
+  const end = $("report-end").value;
+  const summary = $("department-analytics-summary");
+  if (!start || !end || start > end) {
+    summary.replaceChildren();
+    fillRows("department-analytics", [], "Escolha um período válido.");
+    return;
+  }
+  const from = new Date(`${start}T00:00:00`).toISOString();
+  const exclusiveEnd = new Date(`${end}T00:00:00`);
+  exclusiveEnd.setDate(exclusiveEnd.getDate() + 1);
+  const to = exclusiveEnd.toISOString();
+  try {
+    const result = await api(`/api/capture/v1/admin/analytics/departments?${new URLSearchParams({ from, to })}`);
+    if (version !== departmentAnalyticsVersion || state.screen !== "governance") return;
+    const rows = result.departments || [];
+    const totals = rows.reduce((sum, row) => ({
+      interactions: sum.interactions + Number(row.interactions || 0),
+      complete: sum.complete + Number(row.complete_responses || 0),
+      incomplete: sum.incomplete + Number(row.incomplete_responses || 0),
+    }), { interactions: 0, complete: 0, incomplete: 0 });
+    summary.replaceChildren();
+    for (const [label, value, detail] of [
+      ["Interações", totals.interactions, "No período selecionado"],
+      ["Respostas completas", totals.complete, "Captura integral"],
+      ["Respostas incompletas", totals.incomplete, "Captura parcial ou interrompida"],
+    ]) {
+      const card = document.createElement("div");
+      card.className = "report-summary-primary";
+      const caption = document.createElement("span");
+      caption.textContent = label;
+      const number = document.createElement("strong");
+      number.textContent = Number(value).toLocaleString("pt-BR");
+      const description = document.createElement("small");
+      description.textContent = detail;
+      card.append(caption, number, description);
+      summary.append(card);
+    }
+    fillRows("department-analytics", rows.map(row => {
+      const platform = row.platform === "chatgpt_web" ? "ChatGPT" : row.platform === "claude_web" ? "Claude" : governanceLabel(row.platform);
+      return metadataRow(row.department_name || row.department_code,
+        `${platform} · ${Number(row.interactions || 0).toLocaleString("pt-BR")} interações · ${Number(row.complete_responses || 0).toLocaleString("pt-BR")} completas · ${Number(row.incomplete_responses || 0).toLocaleString("pt-BR")} incompletas`);
+    }), "Sem capturas no período.");
+  } catch (error) {
+    if (version === departmentAnalyticsVersion && state.screen === "governance") {
+      summary.replaceChildren();
+      fillRows("department-analytics", [], error.message);
+    }
+  }
+}
 
 for (const button of document.querySelectorAll("[data-governance-tab]")) {
   button.addEventListener("click", () => selectGovernanceTab(button.dataset.governanceTab));
@@ -1877,7 +1933,13 @@ async function downloadJson(path, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
-$("report-form").addEventListener("submit", event => { event.preventDefault(); loadGovernance(); });
+$("report-form").addEventListener("submit", event => {
+  event.preventDefault();
+  loadGovernance();
+  if (document.querySelector('[data-governance-tab][aria-current="page"]')?.dataset.governanceTab === "department-analytics") {
+    void loadDepartmentAnalytics();
+  }
+});
 $("report-export").addEventListener("click", async () => {
   const start = $("report-start").value;
   const end = $("report-end").value;

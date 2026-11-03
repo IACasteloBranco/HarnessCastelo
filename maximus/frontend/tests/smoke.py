@@ -1,10 +1,11 @@
 import json
+import os
 from pathlib import Path
 from tempfile import gettempdir
 from playwright.sync_api import sync_playwright
 
 
-BASE = "https://localhost:18443/"
+BASE = os.getenv("MAXIMUS_SMOKE_BASE", "https://localhost:18443/")
 
 
 def mock(route, body, status=200, content_type="application/json", headers=None):
@@ -15,7 +16,7 @@ def mock(route, body, status=200, content_type="application/json", headers=None)
 with sync_playwright() as playwright:
     browser = playwright.chromium.launch(headless=True,
                                          args=["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream"])
-    for role, screenshot in [("collaborator", "maximus-chat-preview.png"), ("governance", "maximus-governance-preview.png")]:
+    for role, screenshot in [("collaborator", "maximus-chat-preview.png"), ("governance", "maximus-governance-preview.png"), ("auditor", "maximus-auditor-preview.png")]:
         screenshot = str(Path(gettempdir()) / screenshot)
         context = browser.new_context(viewport={"width": 1448, "height": 1086},
                                       ignore_https_errors=True, timezone_id="America/Sao_Paulo")
@@ -78,6 +79,10 @@ with sync_playwright() as playwright:
                     "Content-Type": "application/pdf", "Content-Disposition": "attachment; filename=maximus-teste.pdf"})
             if path.startswith("governance/reports/daily"):
                 return mock(route, {"usage": [{"day": "2026-10-25", "department": "CONTABIL", "runs": 3, "errors": 1, "latency_ms": 3000, "latency_samples": 2}], "findings": [{"day": "2026-10-25", "department": "CONTABIL", "category": "sensitive_data", "count": 1}]})
+            if path.startswith("capture/v1/admin/analytics/departments?"):
+                return mock(route, {"departments": [{"department_code": "CONTABIL", "department_name": "Contabilidade",
+                    "platform": "chatgpt_web", "interactions": 3, "responses": 3,
+                    "complete_responses": 2, "incomplete_responses": 1}]})
             if path == "governance/departments":
                 return mock(route, {"departments": [{"code": "CONTABIL", "name": "Contabilidade"}]})
             if path == "governance/runs":
@@ -289,6 +294,10 @@ with sync_playwright() as playwright:
             assert downloaded.value.suggested_filename == "notas.txt"
             page.locator("#artifact-dialog-close").click()
             assert "📎" not in page.locator("#chat-transcript").inner_text()
+        elif role == "auditor":
+            page.get_by_role("heading", name="Visão de uso").wait_for()
+            assert not page.get_by_role("button", name="Analytics da Governança", exact=True).is_visible()
+            assert not any(path.startswith("capture/v1/admin/analytics/departments") for path in calls)
         else:
             page.get_by_role("heading", name="Visão de uso").wait_for()
             page.locator(".governance-breakdown summary").click()
@@ -354,6 +363,14 @@ with sync_playwright() as playwright:
             assert "new" in race_result and "old" not in race_result
             page.locator("#capture-filter-form button[type=submit]").click()
             assert not page.locator("#capture-detail").is_visible()
+            page.get_by_role("button", name="Analytics da Governança", exact=True).click()
+            page.get_by_role("heading", name="Capturas por departamento").wait_for()
+            page.get_by_text("Contabilidade", exact=True).wait_for()
+            analytics_text = page.locator("#department-analytics").inner_text()
+            assert "Contabilidade" in analytics_text and "3 interações" in analytics_text, analytics_text
+            assert "2 completas" in analytics_text and "1 incompleta" in analytics_text
+            assert "COLAB001" not in analytics_text
+            assert any(path.startswith("capture/v1/admin/analytics/departments?") for path in calls)
         page.screenshot(path=screenshot, full_page=True)
         page.set_viewport_size({"width": 390, "height": 844})
         page.screenshot(path=screenshot.replace(".png", "-mobile.png"), full_page=True)

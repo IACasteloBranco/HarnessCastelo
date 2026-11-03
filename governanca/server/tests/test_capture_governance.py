@@ -22,6 +22,17 @@ from governanca.server.app import app
 
 
 class CaptureRouteMountingTests(unittest.TestCase):
+    def test_governance_department_analytics_is_mounted(self):
+        route = next((route for route in analytics_router.routes
+                      if isinstance(route, APIRoute)
+                      and route.path == "/v1/admin/analytics/departments"), None)
+        self.assertIsNotNone(route)
+        self.assertIn("/v1/admin/analytics/departments", CAPTURE_PATHS)
+        mounted = [route for route in capture_app().router.routes
+                   if isinstance(route, APIRoute)
+                   and route.path == "/v1/admin/analytics/departments"]
+        self.assertEqual(len(mounted), 1)
+
     def test_analytics_router_is_canonical_when_legacy_route_conflicts(self):
         analytics_route = next(route for route in analytics_router.routes
                                if isinstance(route, APIRoute)
@@ -144,6 +155,7 @@ class CaptureGovernanceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(keys), len(set(keys)))
         self.assertTrue(all(route.path in CAPTURE_PATHS for route in routes))
         self.assertIn(("/v1/admin/analytics/summary", frozenset({"GET"})), keys)
+        self.assertIn(("/v1/admin/analytics/departments", frozenset({"GET"})), keys)
         self.assertIn(("/v1/admin/analytics/interactions", frozenset({"GET"})), keys)
 
     async def test_governance_capture_access_is_scoped_and_audited(self):
@@ -161,6 +173,8 @@ class CaptureGovernanceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(auditor_summary.status_code, 200, auditor_summary.text)
         self.assertNotIn("by_employee", auditor_summary.json())
         self.assertEqual((await self.clients["denied"].get(
+            "/api/capture/v1/admin/analytics/departments")).status_code, 403)
+        self.assertEqual((await self.clients["denied"].get(
             "/api/capture/v1/admin/analytics/interactions")).status_code, 403)
 
         client = self.clients["viewer"]
@@ -168,6 +182,21 @@ class CaptureGovernanceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(summary.status_code, 200, summary.text)
         self.assertEqual({row["department_code"] for row in summary.json()["by_department"]},
                          {self.department, self.other_department})
+        department_analytics = await client.get(
+            "/api/capture/v1/admin/analytics/departments",
+            params={"from": "2026-10-30T00:00:00Z", "to": "2026-10-31T00:00:00Z"},
+        )
+        self.assertEqual(department_analytics.status_code, 200, department_analytics.text)
+        analytics_rows = department_analytics.json()["departments"]
+        self.assertEqual(
+            {(row["department_code"], row["platform"], row["interactions"])
+             for row in analytics_rows},
+            {(self.department, "chatgpt_web", 2), (self.department, "claude_web", 1),
+             (self.other_department, "chatgpt_web", 1)},
+        )
+        self.assertNotIn(self.viewer, str(department_analytics.json()))
+        self.assertNotIn("employee_id", str(department_analytics.json()))
+        self.assertNotIn("person_name", str(department_analytics.json()))
         params = {
             "employee_id": self.viewer,
             "platform": "chatgpt_web",
