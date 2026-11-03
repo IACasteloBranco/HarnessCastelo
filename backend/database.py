@@ -21,6 +21,9 @@ class Base(DeclarativeBase):
     pass
 
 
+INTERNAL_RUN_ORIGINS = frozenset(("title_generation", "profile_learning", "artifact_generation", "department_analysis"))
+
+
 class Account(Base):
     __tablename__ = "accounts"
 
@@ -61,6 +64,10 @@ class Run(Base):
             "outcome IN ('open', 'completed', 'failed', 'incomplete', 'interrupted')",
             name="ck_runs_outcome",
         ),
+        CheckConstraint(
+            "origin IN ('chat', 'api', 'title_generation', 'profile_learning', 'artifact_generation', 'department_analysis', 'legacy_unknown')",
+            name="ck_runs_origin",
+        ),
         Index("ix_runs_credential_started", "credential_id", "started_at"),
         Index("ix_runs_started_outcome", "started_at", "outcome"),
         UniqueConstraint("employee_id", "client_message_id", name="uq_runs_employee_client_message"),
@@ -88,6 +95,7 @@ class Run(Base):
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     method: Mapped[str] = mapped_column(String(16), nullable=False)
     path: Mapped[str] = mapped_column(Text, nullable=False)
+    origin: Mapped[str] = mapped_column(String(24), nullable=False)
     model: Mapped[str | None] = mapped_column(String(255), nullable=True)
     request_body: Mapped[str] = mapped_column(Text, nullable=False)
     request_json: Mapped[dict | list | None] = mapped_column(JSONB, nullable=True)
@@ -197,12 +205,8 @@ class Employee(Base):
         ForeignKeyConstraint(
             ["organization_id", "department_id"], ["departments.organization_id", "departments.id"]
         ),
-        CheckConstraint("role IN ('collaborator', 'governance')", name="ck_employees_role"),
+        CheckConstraint("role IN ('collaborator', 'auditor', 'governance')", name="ck_employees_role"),
         CheckConstraint("role = 'governance' OR department_id IS NOT NULL", name="ck_employees_department"),
-        Index(
-            "uq_employees_active_governance", "organization_id", unique=True,
-            postgresql_where=text("role = 'governance' AND disabled = false"),
-        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
@@ -210,7 +214,6 @@ class Employee(Base):
     department_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     code: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
     role: Mapped[str] = mapped_column(String(20), nullable=False)
-    can_govern: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     must_change_password: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     disabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -281,8 +284,29 @@ class GovernanceAccess(Base):
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
     actor_employee_id: Mapped[UUID] = mapped_column(ForeignKey("employees.id"), nullable=False, index=True)
     run_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False, index=True)
+    investigation_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("governance_investigations.id"), nullable=True, index=True)
     action: Mapped[str] = mapped_column(String(16), nullable=False)
     accessed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class GovernanceInvestigation(Base):
+    __tablename__ = "governance_investigations"
+    __table_args__ = (
+        CheckConstraint("status IN ('pending', 'approved', 'rejected')", name="ck_investigations_status"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    organization_id: Mapped[UUID] = mapped_column(ForeignKey("organizations.id"), nullable=False)
+    requested_by: Mapped[UUID] = mapped_column(ForeignKey("employees.id"), nullable=False)
+    purpose: Mapped[str] = mapped_column(String(2000), nullable=False)
+    viewer_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    target_employee_id: Mapped[UUID | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
+    approved_by: Mapped[UUID | None] = mapped_column(ForeignKey("employees.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class PromptFinding(Base):

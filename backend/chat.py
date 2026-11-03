@@ -9,11 +9,14 @@ from uuid import UUID, uuid4
 from sqlalchemy import String, cast, delete, exists, or_, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert
 
-from backend.database import (ChatArtifact, ChatAttachment, ContextNote, Conversation, Employee, GovernanceAccess, Project, Run,
+from backend.database import (ChatArtifact, ChatAttachment, ContextNote, Conversation, Department, Employee, GovernanceAccess, INTERNAL_RUN_ORIGINS, Project, Run,
                               RunEvent, session_factory)
+from backend.governance import current_prompt
+from backend.governance_access import has_governance_access
+from backend.investigations import require_investigation
 from backend.store import (AdmittedRun, ChatRun, RequestRecord,
                            _fernet, _locked_employee_credential, _record_run,
-                           recover_abandoned_runs)
+                           recover_abandoned_runs, recover_chat_output)
 
 
 class ChatConflict(Exception):
@@ -345,6 +348,17 @@ CHAT_KNOWLEDGE_TOOL = {
         "required": ["query"], "additionalProperties": False}, "strict": True,
 }
 
+CHAT_DEPARTMENT_ANALYSIS_TOOL = {
+    "type": "function", "name": "analyze_department_interactions",
+    "description": "Analise tendências, gargalos e dificuldades nas interações de um departamento. A ferramenta devolve somente categorias e contagens agregadas; nunca peça conteúdo individual.",
+    "parameters": {"type": "object", "properties": {
+        "department_code": {"type": "string", "description": "Código do departamento citado pelo usuário"},
+        "question": {"type": "string", "description": "Pergunta de análise do usuário"},
+        "days": {"type": "integer", "minimum": 1, "maximum": 90}},
+        "required": ["department_code", "question", "days"], "additionalProperties": False},
+    "strict": True,
+}
+
 
 @dataclass(frozen=True)
 class ArtifactDirective:
@@ -489,7 +503,7 @@ async def admit_chat(employee_id: UUID, credential_id: str, client_message_id: U
     async with session_factory()() as session, session.begin():
         credential = await _locked_employee_credential(session, employee_id, credential_id)
         employee = await session.scalar(select(Employee).where(Employee.id == employee_id).with_for_update())
-        if employee.role not in {"collaborator", "governance"}:
+        if employee.role not in {"collaborator", "auditor", "governance"}:
             raise ChatConflict("collaborator_required")
         duplicate = await session.scalar(select(Run.id).where(
             Run.employee_id == employee_id, Run.client_message_id == client_message_id))
@@ -559,6 +573,8 @@ async def admit_chat(employee_id: UUID, credential_id: str, client_message_id: U
                 json.dumps(saved_context, ensure_ascii=False)})
         for run in prior:
             answer = _assistant_text(run.response_json)
+            if answer is None and await recover_chat_output(session, run):
+                answer = _assistant_text(run.response_json)
             if not run.chat_prompt or answer is None:
                 raise ChatConflict("context_unavailable", run.id)
             input_items.extend((
@@ -576,6 +592,17 @@ async def admit_chat(employee_id: UUID, credential_id: str, client_message_id: U
         current_content = ([{"type": "input_text", "text": text}] if text else []) + (file_content or [])
         input_items.append({"role": "user", "content": current_content if file_content else text})
         tools = [CHAT_ARTIFACT_TOOL]
+        if employee.role in {"auditor", "governance"}:
+            departments = (await session.scalars(select(Department.code).where(
+                Department.organization_id == employee.organization_id).order_by(Department.code))).all()
+            input_items[0]["content"] += (
+                " Para perguntas sobre indicadores, gargalos ou dificuldades de um departamento, use "
+                "analyze_department_interactions. Passe o código citado pelo usuário, a pergunta e o período; "
+                "se não houver código claro, peça esclarecimento antes de chamar a ferramenta. "
+                f"Códigos de departamentos disponíveis: {', '.join(departments)}. "
+                "Responda apenas com os agregados devolvidos e não tente inferir identidades individuais."
+            )
+            tools.append(CHAT_DEPARTMENT_ANALYSIS_TOOL)
         if employee.role == "collaborator" and employee.department_id is not None:
             input_items[0]["content"] += (
                 " Se documentos internos do departamento forem úteis, use search_department_knowledge; "
@@ -590,7 +617,7 @@ async def admit_chat(employee_id: UUID, credential_id: str, client_message_id: U
         request = RequestRecord("POST", "responses", json.dumps(payload, ensure_ascii=False).encode())
         admitted = await _record_run(session, credential, request, employee_id,
                                      ChatRun(conversation.id, client_message_id, text,
-                                             [metadata for metadata, _ in files or []]))
+                                             [metadata for metadata, _ in files or []]), origin="chat")
         if files:
             await session.flush()
             session.add_all(ChatAttachment(
@@ -603,13 +630,14 @@ async def admit_chat(employee_id: UUID, credential_id: str, client_message_id: U
 
 
 def _summary(run: Run) -> dict:
+    request = run.request_json if isinstance(run.request_json, dict) else {}
     return {
         "run_id": run.id,
         "conversation_id": run.conversation_id,
         "credential_id": run.credential_id,
         "client_message_id": run.client_message_id,
         "prompt": run.chat_prompt,
-        "attachments": (run.request_json or {}).get("attachments", []),
+        "attachments": request.get("attachments", []),
         "response": run.response_json,
         "outcome": run.outcome,
         "http_status": run.http_status,
@@ -900,47 +928,69 @@ async def employee_artifact(employee_id: UUID, artifact_id: UUID) -> tuple[str, 
         return artifact.name, artifact.mime_type, _fernet().decrypt(artifact.ciphertext)
 
 
+RUN_SOURCES = {
+    "department_analysis": "Análise departamental",
+    "chat": "Chat do Maximus",
+    "api": "API",
+    "title_generation": "Título automático",
+    "profile_learning": "Perfil automático",
+    "artifact_generation": "Planilha automática",
+    "legacy_unknown": "Origem histórica não identificada",
+}
+
+
 async def governance_runs(actor_id: UUID, before: UUID | None, limit: int) -> list[dict]:
     async with session_factory()() as session:
         actor = await session.get(Employee, actor_id)
-        if actor is None or actor.disabled or actor.must_change_password or not (actor.role == "governance" or actor.can_govern):
+        if actor is None or actor.disabled or actor.must_change_password or not has_governance_access(actor.role):
             raise PermissionError
-        scope = or_(Run.employee_id.is_(None), Employee.organization_id == actor.organization_id)
-        query = select(Run).outerjoin(Employee, Employee.id == Run.employee_id).where(scope)
+        scope = or_(Run.organization_id == actor.organization_id,
+                    Run.organization_id.is_(None) & (Employee.organization_id == actor.organization_id))
+        query = select(Run, Employee.code, Department.code).outerjoin(
+            Employee, Employee.id == Run.employee_id).outerjoin(
+            Department, Department.id == Run.department_id).where(scope)
         if before:
-            cursor = await session.scalar(query.where(Run.id == before))
+            cursor = await session.scalar(select(Run).where(Run.id == before))
             if cursor is None:
                 raise HistoryNotFound
             query = query.where(tuple_(Run.started_at, Run.id) <
                                 tuple_(cursor.started_at, cursor.id))
-        runs = (await session.scalars(query.order_by(
+        runs = (await session.execute(query.order_by(
             Run.started_at.desc(), Run.id.desc()).limit(limit))).all()
-        return [{"run_id": run.id, "employee_id": run.employee_id,
+        return [{"run_id": run.id, "employee_code": code, "department_code": department,
                  "conversation_id": run.conversation_id, "outcome": run.outcome,
-                 "source": "Chat do Maximus" if run.conversation_id else "API",
+                 "origin": run.origin, "source": RUN_SOURCES[run.origin],
                  "duration_ms": max(0, round((run.finished_at - run.started_at).total_seconds() * 1000)) if run.finished_at else None,
-                 "started_at": run.started_at} for run in runs]
+                 "started_at": run.started_at} for run, code, department in runs]
 
 
-async def governance_run(actor_id: UUID, run_id: UUID, action: str = "read") -> dict:
+async def governance_run(actor_id: UUID, run_id: UUID, investigation_id: UUID,
+                         action: str = "read") -> dict:
     if action not in ("read", "export"):
         raise ValueError("invalid governance action")
     async with session_factory()() as session, session.begin():
         actor = await session.get(Employee, actor_id)
-        if actor is None or actor.disabled or actor.must_change_password or not (actor.role == "governance" or actor.can_govern):
+        if actor is None or actor.disabled or actor.must_change_password or not has_governance_access(actor.role):
             raise PermissionError
         run = await session.get(Run, run_id)
         author = await session.get(Employee, run.employee_id) if run and run.employee_id else None
         if run is None or (run.employee_id is not None and
                            (author is None or author.organization_id != actor.organization_id)):
             raise HistoryNotFound
+        if run.employee_id is None:
+            raise HistoryNotFound
+        await require_investigation(actor_id, investigation_id, run.employee_id)
         events = (await session.scalars(select(RunEvent).where(
             RunEvent.run_id == run_id).order_by(RunEvent.ordinal))).all()
         session.add(GovernanceAccess(id=uuid4(), actor_employee_id=actor_id,
-                                     run_id=run_id, action=action,
+                                     run_id=run_id, investigation_id=investigation_id, action=action,
                                      accessed_at=datetime.now(timezone.utc)))
         await session.flush()
-        return {**_summary(run), "employee_id": run.employee_id,
+        prompt = run.chat_prompt if run.origin == "chat" else current_prompt(run.request_json, run.path)
+        return {**_summary(run), "prompt": prompt or None,
+                "origin": run.origin, "source": RUN_SOURCES[run.origin],
+                "is_internal": run.origin in INTERNAL_RUN_ORIGINS,
+                "employee_id": run.employee_id,
                 "employee_code": author.code if author else None,
                 "request": run.request_json, "request_body": run.request_body,
                 "events": [{"ordinal": event.ordinal, "type": event.event_type,

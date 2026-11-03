@@ -2,9 +2,9 @@
 
 Proxy FastAPI para o backend Codex, com OAuth por conta, chaves de cliente, limites de uso e captura de execuções para o harness.
 
-O código está separado em `backend/`, `gateway/` e `frontend/`. O mapa atual e os limites ainda pendentes estão em [`docs/PROJECT_CONTEXT.md`](docs/PROJECT_CONTEXT.md).
+O Maximus legado está em [`maximus/`](maximus/README.md). Seu código continua nos diretórios `backend/`, `gateway/` e `frontend/` durante esta etapa de separação; o mapa atual está em [`docs/PROJECT_CONTEXT.md`](docs/PROJECT_CONTEXT.md).
 
-A extensão que captura conversas do ChatGPT e do Claude está em [`browser-extension/`](browser-extension/README.md); sua API roda integrada ao gateway.
+A extensão de governança que captura conversas do ChatGPT e do Claude está em [`governanca/extension/`](governanca/extension/README.md); sua API ainda roda integrada ao gateway legado.
 
 Para retomar o MVP em outra máquina, leia o [estado atual e roteiro de continuidade](docs/HANDOFF.md). O frontend completo está em [`frontend/public/`](frontend/public/) e seu funcionamento está descrito no [README do frontend](frontend/README.md).
 
@@ -85,7 +85,9 @@ A identidade interna usa tabelas próprias e não altera os usuários OAuth ou a
 python -m backend.scripts.provision organization EMPRESA "Minha Empresa"
 python -m backend.scripts.provision department EMPRESA CONTABIL "Contabilidade"
 python -m backend.scripts.provision employee EMPRESA COLAB001 --department CONTABIL
+python -m backend.scripts.provision employee EMPRESA AUD001 --role auditor --department CONTABIL
 python -m backend.scripts.provision employee EMPRESA GOV001 --role governance
+python -m backend.scripts.provision employee EMPRESA GOV002 --role governance
 ```
 
 O comando de criação imprime uma senha temporária uma vez. Entregue-a ao colaborador por um canal interno apropriado. Para recuperar o acesso ou desativar uma conta, use:
@@ -152,7 +154,9 @@ O prompt do chat informa à IA que o Maximus gera arquivos. Quando o usuário pe
 
 `GET /api/chat/attachments/ID/preview` aplica a autorização do download. Devolve PDF e imagens para exibição no navegador, tabelas CSV/TSV/XLSX como JSON e texto/código como JSON limitado a 200 KB. Formatos sem prévia retornam 415; o arquivo original continua disponível para download.
 
-Uma conta `collaborator` pode receber `employees.can_govern = true` por uma operação administrativa no banco e acessar a governança sem perder o chat. A permissão é conferida em cada requisição; a interface mostra Governança na barra lateral e no menu de perfil dessa conta. Contas sem a permissão continuam recebendo `403` nas rotas de governança.
+Os papéis são `collaborator` (usuário), `auditor` e `governance`. Todos mantêm o próprio chat. O auditor vê métricas departamentais de toda a empresa e pode pedir ao Maximus uma análise agregada, mas não recebe interações ou conteúdo bruto. A governança vê metadados com código de colaborador e departamento. A leitura e exportação de conteúdo exigem uma investigação com finalidade e leitores declarados, aprovada por outro membro da governança; depois um leitor seleciona um colaborador e o acesso vale por uma hora. As leituras ficam auditadas. É preciso ter ao menos duas contas de governança para aprovar uma investigação.
+
+Auditores e governança podem perguntar sobre indicadores, gargalos e dificuldades departamentais no chat normal do Maximus. Quando necessário, o modelo chama uma ferramenta do backend, que consulta apenas o departamento indicado e devolve categorias fixas e contagens, sem textos originais nem códigos de autores. A análise usa até 80 interações recentes, limitada a 10 por autor; temas com menos de três ocorrências são omitidos. Configure `GOVERNANCE_ANALYSIS_CREDENTIAL_ID` com uma credencial corporativa aprovada e atribua-a aos usuários que farão essas consultas. Configure também a entrega de alertas abaixo para notificar a governança quando houver possível irregularidade. Relatórios externos continuam fora do Maximus e exigem sanitização manual.
 
 ## Biblioteca compartilhada por departamento (piloto)
 
@@ -164,7 +168,7 @@ A migração `0017_department_knowledge` cria a extensão `vector` e as tabelas 
 
 O backend analisa a mensagem nova antes de encaminhá-la. O chat e as rotas de proxy usam o mesmo ponto de admissão. A análise registra achados sem bloquear a mensagem. As regras atuais marcam cabeçalhos de chave privada PEM como alta confiança; padrões de CPF, CNPJ e pedidos explícitos para ignorar instruções ficam para revisão. Os achados guardam categoria, regra e confiança, sem copiar trechos do prompt.
 
-O responsável pela governança consulta metadados em `GET /api/governance/findings` e o estado das notificações em `GET /api/governance/alerts`. Ambas as rotas aceitam `limit` e `before` para paginação. `GET /api/governance/runs/RUN_ID/export` baixa o conteúdo bruto em JSON e registra `action=export` em `governance_access`. A leitura normal do run continua registrando `action=read`.
+O responsável pela governança consulta metadados em `GET /api/governance/findings` e o estado das notificações em `GET /api/governance/alerts`. Ambas as rotas aceitam `limit` e `before` para paginação. `GET /api/governance/runs/RUN_ID/export?investigation_id=ID` baixa o conteúdo bruto em JSON após a aprovação e registra `action=export` e a investigação em `governance_access`. A leitura normal do run registra `action=read`.
 
 Cada achado de alta confiança cria um alerta pendente na mesma transação do run. O processo de envio usa SMTP com TLS implícito e precisa destas variáveis protegidas: `GOVERNANCE_ALERT_EMAIL`, `ALERT_SMTP_HOST`, `ALERT_SMTP_FROM` e, se o servidor exigir login, `ALERT_SMTP_USERNAME` e `ALERT_SMTP_PASSWORD`. `ALERT_SMTP_PORT` usa 465 por padrão. Depois de configurar as variáveis no ambiente do serviço, execute o processo separado:
 

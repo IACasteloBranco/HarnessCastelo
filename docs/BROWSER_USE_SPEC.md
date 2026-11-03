@@ -12,7 +12,7 @@ Antes de editar:
 
 1. Leia `AGENTS.md`, este spec, `docs/BROWSER_SKILL_DESIGN.md` e `docs/backend-security-decisions.md`.
 2. Reconfirme `git status` e branch. Preserve alterações locais, especialmente arquivos não rastreados.
-3. Trace o fluxo real de chat e ferramentas em `backend/chat.py`, `gateway/chat.py`, `gateway/forwarder.py` e seus testes. Trace também a estrutura atual de `browser-extension/`; não a transforme na extensão de automação.
+3. Trace o fluxo real de chat e ferramentas em `backend/chat.py`, `gateway/chat.py`, `gateway/forwarder.py` e seus testes. Trace também a estrutura atual de `governanca/extension/`; não a transforme na extensão de automação.
 4. Apresente um plano curto com arquivos/camadas que pretende tocar e riscos de autorização antes de implementar. Não replique por suposição o contrato antigo se divergir deste spec; reporte a divergência.
 5. Implemente incrementalmente, com testes para validação, autorização, ciclo de chamadas, falhas e compatibilidade com conhecimento/artefatos. Execute os testes relevantes e reporte claramente os que não puder executar.
 
@@ -24,7 +24,7 @@ Não faça refatorações gerais do forwarder nem alterações de política de g
 - `gateway/chat.py`: associar as chamadas à identidade autenticada e ao run admitido. Não aceitar do modelo `employee_id`, `run_id`, ID real de aba, token ou credencial como autoridade.
 - `gateway/forwarder.py`: integrar o ciclo sequencial das chamadas de browser ao stream Responses existente, preservando ordinais contínuos, captura, heartbeat, finalização e busca de conhecimento. Não assumir que o tratamento atual de conhecimento é um executor genérico: ele só trata um caso específico.
 - Novo módulo de browser use no gateway/backend: concentrar validação, autorização, despacho, correlação, timeout e limite de ações. Escolher o menor local que se encaixe no código existente; não criar camada genérica sem necessidade.
-- Nova extensão independente de browser use (diretório próprio): interface de seleção/autorização da aba, service worker para ciclo de vida e encaminhamento de mensagens, content script para observar/executar operações permitidas. Não adicionar essas responsabilidades a `browser-extension/` atual.
+- Nova extensão independente de browser use (diretório próprio): interface de seleção/autorização da aba, service worker para ciclo de vida e encaminhamento de mensagens, content script para observar/executar operações permitidas. Não adicionar essas responsabilidades a `governanca/extension/` atual.
 - Content script: tratar DOM, conteúdo e mensagens da página como não confiáveis. Não executar código fornecido pelo modelo, nem expor HTML integral, scripts, cookies, storage, cabeçalhos, histórico ou campos ocultos.
 
 A autenticação precisa identificar o colaborador no servidor e manter a extensão separada da captura. Reutilizar componentes de identidade do sistema somente após verificar sua adequação; não reutilizar o token da extensão de captura como autorização de browser. Segredos e tokens nunca são expostos às ferramentas do modelo.

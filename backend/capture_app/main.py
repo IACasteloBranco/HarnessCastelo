@@ -47,6 +47,21 @@ def fingerprint(payload: dict) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+async def protect_content_for_storage(request: Request, text: str) -> str:
+    protector = getattr(request.app.state, "protect_content", None)
+    if protector is None:
+        raise HTTPException(503, "Sensitive data storage inspection is unavailable")
+    try:
+        protected = await protector(text)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(503, "Sensitive data storage inspection is unavailable") from exc
+    if not isinstance(protected, str):
+        raise HTTPException(503, "Sensitive data storage inspection returned an invalid result")
+    return protected
+
+
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 app.include_router(analytics_router)
 
@@ -71,7 +86,7 @@ def recent_stream_captures(scope: dict = Depends(require_operator_token),
                            settings: Settings = Depends(get_settings)) -> dict:
     with connect(settings) as db:
         rows = db.execute(
-            """SELECT capture_id, device_installation_id, attributed_person, employee_id, department_code, machine_key_fingerprint,
+            """SELECT capture_id, device_installation_id, employee_id, department_code, machine_key_fingerprint,
                       platform, path, request_id, status_code, content_type, capture_status,
                       response_chars, bytes, chunks, frames, done_markers, protocol_done,
                       reader_done, reader_aborted_after_done, truncated, stream_elapsed_ms,
@@ -98,8 +113,8 @@ def recent_artifact_metadata(scope: dict = Depends(require_operator_token),
                              settings: Settings = Depends(get_settings)) -> dict:
     with connect(settings) as db:
         rows = db.execute(
-            """SELECT artifact_id, device_installation_id, attributed_person, employee_id, department_code, machine_key_fingerprint,
-                      platform, source, file_name, mime_type, size_bytes, conversation_id,
+            """SELECT artifact_id, device_installation_id, employee_id, department_code, machine_key_fingerprint,
+                      platform, source, mime_type, size_bytes, conversation_id,
                       conversation_context_source, size_source, observed_at, received_at
                FROM artifact_metadata
                WHERE employee_id IN (SELECT employee.code FROM public.employees AS employee
@@ -296,7 +311,7 @@ def reject_machine_assignment_request(
     response_model=InteractionAccepted,
     status_code=status.HTTP_201_CREATED,
 )
-def create_interaction(
+async def create_interaction(
     payload: InteractionCreate,
     request: Request,
     response: Response,
@@ -306,7 +321,9 @@ def create_interaction(
     project_id = project_id_from_url(payload.project.url)
     if machine and str(payload.device_installation_id) != machine.installation_id:
         raise HTTPException(status_code=409, detail="Machine and installation do not match")
+    protected_prompt = await protect_content_for_storage(request, payload.prompt.text)
     body = payload.model_dump(mode="json")
+    body["prompt"]["text"] = protected_prompt
     if machine:
         body["machine_key_fingerprint"] = machine.fingerprint
     request_fingerprint = fingerprint(body)
@@ -347,7 +364,7 @@ def create_interaction(
                 payload.account_label,
                 json_dump(payload.project.model_dump(mode="json")),
                 json_dump(payload.conversation.model_dump(mode="json")),
-                json_dump(payload.prompt.model_dump(mode="json")),
+                json_dump({**payload.prompt.model_dump(mode="json"), "text": protected_prompt}),
                 json_dump([item.model_dump(mode="json") for item in payload.attachments]),
                 payload.adapter_version,
                 "request_captured",
@@ -376,32 +393,43 @@ def create_interaction(
     )
 
 
+def _response_interaction(db, interaction_id: UUID, machine: Machine | None, settings: Settings):
+    interaction = db.execute(
+        "SELECT interaction_id, device_installation_id, machine_key_fingerprint, department_code "
+        "FROM interactions WHERE interaction_id = ?", (str(interaction_id),)
+    ).fetchone()
+    if interaction is None or (machine and (
+        interaction["device_installation_id"] != machine.installation_id or
+        interaction["machine_key_fingerprint"] != machine.fingerprint or
+        (settings.app_env.lower() == "lab" and interaction["department_code"] != machine.department_code)
+    )):
+        raise HTTPException(status_code=404, detail="interaction not found")
+    return interaction
+
+
 @app.post(
     "/v1/interactions/{interaction_id}/response",
     response_model=ResponseAccepted,
     status_code=status.HTTP_201_CREATED,
 )
-def create_response(
+async def create_response(
     interaction_id: UUID,
     payload: ResponseCreate,
+    request: Request,
     response: Response,
     machine: Machine | None = Depends(require_machine_signature),
     settings: Settings = Depends(get_settings),
 ) -> ResponseAccepted:
+    with connect(settings) as db:
+        _response_interaction(db, interaction_id, machine, settings)
+    protected_text = await protect_content_for_storage(request, payload.text)
     received_at = utc_now()
     body = payload.model_dump(mode="json")
+    body["text"] = protected_text
     request_fingerprint = fingerprint(body)
     with connect(settings) as db:
         begin_write(db, "capture_events", "interactions", "responses")
-        interaction = db.execute(
-            "SELECT interaction_id, device_installation_id, machine_key_fingerprint, department_code FROM interactions WHERE interaction_id = ?", (str(interaction_id),)
-        ).fetchone()
-        if interaction is None:
-            raise HTTPException(status_code=404, detail="interaction not found")
-        if machine and (interaction["device_installation_id"] != machine.installation_id or
-                        interaction["machine_key_fingerprint"] != machine.fingerprint or
-                        (settings.app_env.lower() == "lab" and interaction["department_code"] != machine.department_code)):
-            raise HTTPException(status_code=404, detail="interaction not found")
+        _response_interaction(db, interaction_id, machine, settings)
         existing = db.execute(
             "SELECT interaction_id, request_fingerprint, capture_status, received_at FROM responses WHERE client_event_id = ?",
             (str(payload.client_event_id),),
@@ -426,7 +454,7 @@ def create_response(
                 str(interaction_id),
                 str(payload.client_event_id),
                 request_fingerprint,
-                payload.text,
+                protected_text,
                 payload.capture_status,
                 payload.adapter_version,
                 iso(payload.observed_at),
@@ -565,7 +593,8 @@ def create_artifact_metadata(
     "/v1/interactions/{interaction_id}",
     response_model=InteractionDetail,
 )
-def get_interaction(interaction_id: UUID, response: Response, viewer: dict = Depends(require_content_viewer),
+async def get_interaction(interaction_id: UUID, investigation_id: UUID, response: Response,
+                    viewer: dict = Depends(require_content_viewer),
                     settings: Settings = Depends(get_settings)) -> InteractionDetail:
     response.headers["Cache-Control"] = "no-store"
     with connect(settings) as db:
@@ -579,6 +608,11 @@ def get_interaction(interaction_id: UUID, response: Response, viewer: dict = Dep
                           viewer["department_code"], viewer["department_code"])).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="interaction not found")
+        from backend.investigations import InvestigationDenied, require_investigation_for_code
+        try:
+            await require_investigation_for_code(viewer["actor_id"], investigation_id, row["employee_id"])
+        except InvestigationDenied:
+            raise HTTPException(status_code=403, detail="approved investigation required")
         responses = db.execute(
             "SELECT client_event_id, text, capture_status, adapter_version, observed_at, received_at, generated_materials_json FROM responses WHERE interaction_id = ? ORDER BY received_at",
             (str(interaction_id),),
@@ -588,7 +622,7 @@ def get_interaction(interaction_id: UUID, response: Response, viewer: dict = Dep
             (str(interaction_id),),
         ).fetchall()
         record_privacy_audit(db, "content_read", viewer["actor_sub"],
-                             "GET /v1/interactions/{interaction_id}", 1)
+                             f"GET /v1/interactions/{{interaction_id}} investigation={investigation_id}", 1)
     return InteractionDetail(
         interaction_id=row["interaction_id"],
         client_event_id=row["client_event_id"],

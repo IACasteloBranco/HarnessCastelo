@@ -26,7 +26,7 @@ async def main() -> None:
     employee = commands.add_parser("employee", help="Create an employee with a temporary password")
     employee.add_argument("organization_code")
     employee.add_argument("employee_code")
-    employee.add_argument("--role", choices=["collaborator", "governance"], default="collaborator")
+    employee.add_argument("--role", choices=["collaborator", "auditor", "governance"], default="collaborator")
     employee.add_argument("--department")
 
     reset = commands.add_parser("reset-password", help="Issue a new temporary password and revoke sessions")

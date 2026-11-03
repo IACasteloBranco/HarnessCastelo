@@ -12,7 +12,8 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import or_, select, tuple_, update
 
-from backend.database import AlertOutbox, Employee, PromptFinding, Run, session_factory
+from backend.database import AlertOutbox, Employee, INTERNAL_RUN_ORIGINS, PromptFinding, Run, session_factory
+from backend.governance_access import has_governance_access
 
 
 class GovernanceNotFound(Exception):
@@ -87,7 +88,7 @@ async def queue_findings(session, run_id: UUID, text: str, now: datetime) -> Non
 
 async def _governance_actor(session, actor_id: UUID) -> Employee:
     actor = await session.get(Employee, actor_id)
-    if actor is None or actor.disabled or actor.must_change_password or not (actor.role == "governance" or actor.can_govern):
+    if actor is None or actor.disabled or actor.must_change_password or not has_governance_access(actor.role):
         raise PermissionError
     return actor
 
@@ -97,7 +98,9 @@ async def findings_for_governance(actor_id: UUID, before: UUID | None, limit: in
         actor = await _governance_actor(session, actor_id)
         query = (select(PromptFinding).join(Run, Run.id == PromptFinding.run_id)
                  .outerjoin(Employee, Employee.id == Run.employee_id)
-                 .where(or_(Run.employee_id.is_(None), Employee.organization_id == actor.organization_id)))
+                 .where(or_(Run.organization_id == actor.organization_id,
+                            Run.organization_id.is_(None) & (Employee.organization_id == actor.organization_id)),
+                        ~Run.origin.in_(INTERNAL_RUN_ORIGINS - {"department_analysis"})))
         if before:
             cursor = await session.scalar(query.where(PromptFinding.id == before))
             if cursor is None:
@@ -117,7 +120,9 @@ async def alerts_for_governance(actor_id: UUID, before: UUID | None, limit: int)
         query = (select(AlertOutbox, PromptFinding).join(PromptFinding, PromptFinding.id == AlertOutbox.finding_id)
                  .join(Run, Run.id == PromptFinding.run_id)
                  .outerjoin(Employee, Employee.id == Run.employee_id)
-                 .where(or_(Run.employee_id.is_(None), Employee.organization_id == actor.organization_id)))
+                 .where(or_(Run.organization_id == actor.organization_id,
+                            Run.organization_id.is_(None) & (Employee.organization_id == actor.organization_id)),
+                        ~Run.origin.in_(INTERNAL_RUN_ORIGINS - {"department_analysis"})))
         if before:
             cursor = await session.scalar(query.where(AlertOutbox.id == before))
             if cursor is None:
@@ -138,14 +143,17 @@ class ClaimedAlert:
     run_id: UUID
     category: str
     attempt: int
+    department_code: str | None = None
 
 
 async def _claim_due() -> list[ClaimedAlert]:
     now = datetime.now(timezone.utc)
     async with session_factory()() as session, session.begin():
         rows = (await session.execute(
-            select(AlertOutbox, PromptFinding)
+            select(AlertOutbox, PromptFinding, Run)
             .join(PromptFinding, PromptFinding.id == AlertOutbox.finding_id)
+            .join(Run, Run.id == PromptFinding.run_id)
+            .where(~Run.origin.in_(INTERNAL_RUN_ORIGINS - {"department_analysis"}))
             .where(or_(
                 (AlertOutbox.status == "pending") & (AlertOutbox.next_attempt_at <= now),
                 (AlertOutbox.status == "leased") & (AlertOutbox.lease_until <= now),
@@ -154,11 +162,13 @@ async def _claim_due() -> list[ClaimedAlert]:
             .limit(1).with_for_update(of=AlertOutbox, skip_locked=True)
         )).all()
         claimed = []
-        for alert, finding in rows:
+        for alert, finding, run in rows:
             alert.status = "leased"
             alert.attempts += 1
             alert.lease_until = now + timedelta(seconds=60)
-            claimed.append(ClaimedAlert(alert.id, finding.run_id, finding.category, alert.attempts))
+            department_code = (run.request_json or {}).get("department") if run.origin == "department_analysis" else None
+            claimed.append(ClaimedAlert(alert.id, finding.run_id, finding.category,
+                                        alert.attempts, department_code))
         return claimed
 
 
@@ -203,7 +213,9 @@ def _send_email(alert: ClaimedAlert, config: SMTPConfig) -> None:
     message["From"] = config.sender
     message["To"] = config.recipient
     message["Subject"] = f"Alerta de governança: {alert.category}"
-    message.set_content(f"Categoria: {alert.category}\nReferência protegida: /api/governance/runs/{alert.run_id}\n")
+    message.set_content(f"Categoria: {alert.category}\n"
+                        f"Departamento: {alert.department_code or 'não informado'}\n"
+                        f"Referência protegida: /api/governance/runs/{alert.run_id}\n")
     with smtplib.SMTP_SSL(config.host, config.port, timeout=20, context=ssl.create_default_context()) as smtp:
         if config.username:
             smtp.login(config.username, config.password)

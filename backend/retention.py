@@ -7,9 +7,8 @@ from uuid import UUID
 from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.dialects.postgresql import insert
 
-from backend.database import (DailyFinding, DailyUsage, Department,
+from backend.database import (DailyFinding, DailyUsage, Department, Employee, INTERNAL_RUN_ORIGINS,
                               PromptFinding, Run, session_factory)
-from backend.governance import _governance_actor
 
 LEGACY = "legacy"
 UNATTRIBUTED = "unattributed"
@@ -56,6 +55,8 @@ async def retain_once(now: datetime | None = None, batch_size: int = 500) -> int
         findings = defaultdict(int)
         if selected:
             for run in selected:
+                if run.origin in INTERNAL_RUN_ORIGINS:
+                    continue
                 organization, department = _scope(run.organization_id, run.department_id)
                 key = (organization, department, run.started_at.date())
                 values = usage[key]
@@ -66,7 +67,8 @@ async def retain_once(now: datetime | None = None, batch_size: int = 500) -> int
                     values[2] += latency
                     values[3] += 1
             rows = (await session.execute(select(PromptFinding.run_id, PromptFinding.category).where(
-                PromptFinding.run_id.in_([run.id for run in selected])))).all()
+                PromptFinding.run_id.in_([run.id for run in selected
+                                         if run.origin not in INTERNAL_RUN_ORIGINS])))).all()
             run_scopes = {run.id: _scope(run.organization_id, run.department_id)
                           for run in selected}
             run_days = {run.id: run.started_at.date() for run in selected}
@@ -110,7 +112,10 @@ async def governance_report(actor_id: UUID, start: date, end: date) -> dict:
         raise ValueError("invalid report period")
     async with session_factory()() as session, session.begin():
         await session.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"))
-        actor = await _governance_actor(session, actor_id)
+        actor = await session.get(Employee, actor_id)
+        if (actor is None or actor.disabled or actor.must_change_password
+                or actor.role not in {"auditor", "governance"}):
+            raise PermissionError
         org = str(actor.organization_id)
         usage = defaultdict(lambda: [0, 0, 0, 0, 0, 0])
         findings = defaultdict(int)
@@ -132,6 +137,8 @@ async def governance_report(actor_id: UUID, start: date, end: date) -> dict:
         scopes = {}
         for run in raw:
             _, department = _scope(run.organization_id, run.department_id)
+            if run.origin in INTERNAL_RUN_ORIGINS:
+                continue
             scopes[run.id] = (department, run.started_at.date())
             current = usage[scopes[run.id]]
             current[0] += 1

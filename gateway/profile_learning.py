@@ -52,7 +52,8 @@ async def process_profile_learning(employee_id: UUID, run_id: UUID) -> bool:
     ], "stream": True, "store": False}, ensure_ascii=False).encode()
     try:
         admitted = await admit_employee(employee_id, credential_id,
-                                        RequestRecord("POST", "responses", body))
+                                        RequestRecord("POST", "responses", body),
+                                        origin="profile_learning")
         response = await forward(_background_request(), "responses", admitted, body,
                                  browser_session=True)
         if response.status_code >= 400:
