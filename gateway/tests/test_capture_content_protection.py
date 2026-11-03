@@ -8,11 +8,11 @@ from uuid import uuid4
 
 import httpx
 
-from backend.capture_app.db import connect, initialize
-from backend.capture_app.integration import capture_app
-from backend.capture_app.main import app as legacy_capture_app
-from backend.capture_app.machine_identity import require_machine_signature
-from backend.capture_app.settings import Settings, get_settings
+from governanca.server.capture_app.db import connect, initialize
+from governanca.server.capture_app.integration import capture_app
+from governanca.server.capture_app.main import app as legacy_capture_app
+from governanca.server.capture_app.machine_identity import require_machine_signature
+from governanca.server.capture_app.settings import Settings, get_settings
 from governanca.server.inspection import protect_stored_text
 from governanca.server.sensitive_data_protection import InspectionUnavailable
 from governanca.server import inspection

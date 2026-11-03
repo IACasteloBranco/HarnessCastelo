@@ -17,7 +17,7 @@ from gateway.forwarder import forward
 from gateway.internal_auth import _check_origin, current_employee, router as internal_auth_router
 from gateway.oauth_connection import router as oauth_router
 from gateway.chat import router as chat_router, governance_router
-from backend.capture_app.integration import capture_app, clean_capture_store, initialize_capture_store
+from governanca.server.capture_app.integration import capture_app, clean_capture_store, initialize_capture_store
 from governanca.server.inspection import protect_stored_text
 from gateway.profile_learning import process_pending_profiles
 

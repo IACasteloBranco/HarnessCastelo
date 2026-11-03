@@ -608,7 +608,7 @@ async def get_interaction(interaction_id: UUID, investigation_id: UUID, response
                           viewer["department_code"], viewer["department_code"])).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="interaction not found")
-        from backend.investigations import InvestigationDenied, require_investigation_for_code
+        from governanca.server.investigations import InvestigationDenied, require_investigation_for_code
         try:
             await require_investigation_for_code(viewer["actor_id"], investigation_id, row["employee_id"])
         except InvestigationDenied:

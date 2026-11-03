@@ -9,7 +9,7 @@ import httpx
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 
-from backend.department_analysis import AnalysisUnavailable, aggregate_analysis
+from maximus.department_analysis import AnalysisUnavailable, aggregate_analysis
 from backend.internal_auth import EmployeeInfo
 from gateway.chat import governance_router
 from gateway.internal_auth import current_employee

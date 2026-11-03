@@ -1,4 +1,3 @@
 export const CONFIG = {
-  mode: 'cloud',
-  apiUrl: 'https://app.castelotecnologia.com.br'
+  apiUrl: 'http://127.0.0.1:18081'
 };

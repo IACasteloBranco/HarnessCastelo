@@ -13,7 +13,7 @@ from backend.database import (ChatArtifact, ChatAttachment, ContextNote, Convers
                               RunEvent, session_factory)
 from backend.governance import current_prompt
 from backend.governance_access import has_governance_access
-from backend.investigations import require_investigation
+from governanca.server.investigations import require_investigation
 from backend.store import (AdmittedRun, ChatRun, RequestRecord,
                            _fernet, _locked_employee_credential, _record_run,
                            recover_abandoned_runs, recover_chat_output)

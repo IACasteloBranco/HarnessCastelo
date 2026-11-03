@@ -32,7 +32,7 @@ from backend.chat import (ChatConflict, HistoryNotFound, admit_chat, artifact_so
                           release_title_prompt, rename_conversation, save_suggested_title,
                           save_artifact, suggested_title_response)
 from backend.internal_auth import EmployeeInfo
-from backend.investigations import (InvestigationConflict, InvestigationDenied,
+from governanca.server.investigations import (InvestigationConflict, InvestigationDenied,
     InvestigationNotFound, decide_investigation, list_investigations,
     request_investigation, select_subject)
 from backend.knowledge import (KnowledgeError, departments_for_manager, documents_for_manager,
@@ -43,7 +43,7 @@ from backend.governance import (GovernanceNotFound, alerts_for_governance,
 from backend.store import (QuotaExceeded, RequestRecord, UnavailableAssignment,
                            admit_employee, credential_for_employee)
 from backend.retention import governance_report
-from backend.department_analysis import (AnalysisForbidden, AnalysisUnavailable,
+from maximus.department_analysis import (AnalysisForbidden, AnalysisUnavailable,
     aggregate_analysis, department_samples, notify_possible_incident,
     require_department_access)
 from gateway.auth_store import get_valid_token

@@ -10,11 +10,11 @@ from cryptography.fernet import Fernet
 from fastapi.routing import APIRoute
 from sqlalchemy import delete, select
 
-from backend.capture_app.analytics import router as analytics_router
-from backend.capture_app.db import connect, initialize, iso
-from backend.capture_app.integration import CAPTURE_PATHS, capture_app
-from backend.capture_app.main import app as legacy_capture_app
-from backend.capture_app.settings import get_settings
+from governanca.server.capture_app.analytics import router as analytics_router
+from governanca.server.capture_app.db import connect, initialize, iso
+from governanca.server.capture_app.integration import CAPTURE_PATHS, capture_app
+from governanca.server.capture_app.main import app as legacy_capture_app
+from governanca.server.capture_app.settings import get_settings
 from backend.database import (Department, Employee, GovernanceInvestigation, InternalSession,
                               Organization, _session_factory, session_factory)
 from backend.internal_auth import provision_department, provision_employee, provision_organization

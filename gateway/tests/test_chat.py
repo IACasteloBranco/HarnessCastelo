@@ -21,7 +21,7 @@ from backend.database import (Account, AlertOutbox, ChatArtifact, ChatAttachment
                               session_factory)
 from backend.internal_auth import EmployeeInfo, provision_department, provision_employee, provision_organization
 from backend.knowledge import KnowledgeForbidden, search_department, upload_document
-from backend.department_analysis import AnalysisForbidden, department_samples, notify_possible_incident
+from maximus.department_analysis import AnalysisForbidden, department_samples, notify_possible_incident
 from backend.chat import (CHAT_CAPABILITIES, ChatConflict, admit_chat, claim_context_source,
                           release_context_source, save_generated_profile)
 from backend.artifacts import build_artifact, preview_table

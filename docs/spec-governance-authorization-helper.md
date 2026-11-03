@@ -34,7 +34,7 @@ Na primeira alteração, substituir apenas as verificações duplicadas da mesma
 - `backend/chat.py`: leituras de runs pela governança;
 - `backend/governance.py`: consultas de achados e alertas;
 - `backend/knowledge.py`: operações de gestão de documentos e departamentos;
-- `backend/capture_app/security.py`: dependências de operador, leitura de conteúdo e analytics.
+- `governanca/server/capture_app/security.py`: dependências de operador, leitura de conteúdo e analytics.
 
 Cada chamador mantém as demais verificações e comportamentos que já possui. Não ampliar o conjunto de rotas nem alterar a política de quem tem acesso.
 

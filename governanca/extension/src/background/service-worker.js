@@ -2,7 +2,7 @@ import {CONFIG} from './config.js';
 import {validConversationObservation} from './capture-validation.js';
 
 const CLOUD = true;
-const API = CONFIG.mode === 'local' ? 'http://127.0.0.1:18080' : CONFIG.apiUrl.replace(/\/$/, '');
+const API = CONFIG.apiUrl.replace(/\/$/, '');
 const CHATGPT_ORIGIN = 'https://chatgpt.com';
 const CLAUDE_ORIGIN = 'https://claude.ai';
 const PLATFORM_BY_ORIGIN = new Map([

@@ -1,5 +1,5 @@
-# Maximus legado
+# Maximus
 
-Esta pasta marca a área do produto Maximus durante a separação do repositório. Nesta primeira etapa, o código existente permanece nos diretórios de raiz `backend/`, `gateway/` e `frontend/`, pois Governança ainda consome a API integrada ao gateway.
+Maximus é o projeto de chat e proxy Codex deste monorepo. O gateway e o frontend continuam na raiz (`gateway/`, `frontend/`); os módulos de domínio Maximus ficam em `backend/`, exceto o analytics departamental do chat, em `department_analysis.py`.
 
-A próxima etapa pode mover esses componentes em unidades verificáveis, atualizando imports, migrações, comandos e implantação junto com cada unidade. Não copie os módulos para cá: isso criaria duas fontes de verdade.
+Identidade e modelos PostgreSQL em `backend/internal_auth.py` e `backend/database.py` são compartilhados com Governança. A captura/inspeção da extensão e seu analytics não pertencem a este projeto; ficam em `../governanca/`. Evite dependências de Maximus no servidor da Governança.
