@@ -4,6 +4,8 @@ Este diretório contém a API própria da extensão em `app.py`, as rotas de aut
 
 A rota valida CPF e CNPJ localmente. O Google também inspeciona CPF, e-mail, telefone, nomes e características potencialmente sensíveis.
 
+Antes de gravar uma interação ou resposta, a API inspeciona o texto novamente e salva a versão protegida. Se o SDP falhar, a API retorna HTTP 503 e não grava o conteúdo. O endpoint de captura não aceita conteúdo sem um inspetor configurado.
+
 As características incluem idade, gênero, etnia, estado civil, orientação sexual, saúde, emprego, imigração, religião e política. O SDP eleva a confiança de detecções próximas a termos como “cliente”, “perfil”, “cadastro” ou “paciente”. Esses infoTypes exigem confiança `LIKELY` ou maior.
 
 A política de mascaramento continua separada da detecção e tem versão `governanca-2`. CNPJ continua local porque o Google não oferece um infoType de CNPJ. O texto segue para `southamerica-east1`. Configure `SENSITIVE_DATA_PROTECTION_PROJECT_ID` e, se necessário, `SENSITIVE_DATA_PROTECTION_LOCATION`. O SDK usa Application Default Credentials do servidor, sem chave na extensão.

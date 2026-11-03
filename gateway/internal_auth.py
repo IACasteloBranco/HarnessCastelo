@@ -1,8 +1,6 @@
 """Backward-compatible import path for the internal authentication routes."""
 
 from governanca.server.auth_api import (
-    Action,
-    Category,
     COOKIE_NAME,
     COOKIE_PATH,
     EXTENSION_ORIGIN,
@@ -11,7 +9,6 @@ from governanca.server.auth_api import (
     SensitiveTextBody,
     EmployeeInfo,
     EXTENSION_SESSION_DURATION,
-    InspectionUnavailable,
     SESSION_DURATION,
     _check_origin,
     change_password,
@@ -23,8 +20,6 @@ from governanca.server.auth_api import (
     extension_logout_route,
     extension_me_route,
     extension_renew_route,
-    inspect_sensitive_data,
-    inspect_sensitive_text,
     login_route,
     login,
     logout,
@@ -34,6 +29,8 @@ from governanca.server.auth_api import (
     resolve_session,
     router,
 )
+from governanca.server.data_protection import Action, Category, inspect as inspect_sensitive_text
+from governanca.server.sensitive_data_protection import InspectionUnavailable, inspect_sensitive_data
 
 __all__ = [
     "COOKIE_NAME", "COOKIE_PATH", "EXTENSION_ORIGIN", "LoginBody", "PasswordBody",

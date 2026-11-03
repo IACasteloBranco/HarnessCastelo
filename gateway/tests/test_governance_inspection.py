@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from backend.internal_auth import EmployeeInfo
 from governanca.server.data_protection import Category, Finding
 from governanca.server.sensitive_data_protection import InspectionUnavailable
-from governanca.server import auth_api
+from governanca.server import inspection
 from gateway.internal_auth import EXTENSION_ORIGIN, extension_employee, router
 
 
@@ -20,7 +20,7 @@ class GovernanceInspectionTests(unittest.IsolatedAsyncioTestCase):
             uuid4(), "synthetic", "org", "dept", "collaborator", False
         )
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app), base_url="https://app.test")
-        self.inspection = patch.object(auth_api, "inspect_sensitive_data", new_callable=AsyncMock,
+        self.inspection = patch.object(inspection, "inspect_sensitive_data", new_callable=AsyncMock,
                                        return_value=())
         self.remote_inspection = self.inspection.start()
 

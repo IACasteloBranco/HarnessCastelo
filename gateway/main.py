@@ -18,6 +18,7 @@ from gateway.internal_auth import _check_origin, current_employee, router as int
 from gateway.oauth_connection import router as oauth_router
 from gateway.chat import router as chat_router, governance_router
 from backend.capture_app.integration import capture_app, clean_capture_store, initialize_capture_store
+from governanca.server.inspection import protect_stored_text
 from gateway.profile_learning import process_pending_profiles
 
 logging.basicConfig(
@@ -77,7 +78,7 @@ app.include_router(internal_auth_router)
 app.include_router(oauth_router)
 app.include_router(chat_router)
 app.include_router(governance_router)
-app.mount("/api/capture", capture_app(), name="governance-capture")
+app.mount("/api/capture", capture_app(protect_content=protect_stored_text), name="governance-capture")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["chrome-extension://njcbfaglhfigplenmpaojjgdbcjcfbjh"],

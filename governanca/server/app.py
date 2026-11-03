@@ -14,6 +14,7 @@ from backend.capture_app.integration import (
     initialize_capture_store,
 )
 from governanca.server.auth_api import EXTENSION_ORIGIN, router as auth_router
+from governanca.server.inspection import protect_stored_text
 
 
 @asynccontextmanager
@@ -59,7 +60,7 @@ async def lifespan(application: FastAPI):
 app = FastAPI(lifespan=lifespan)
 app.state.capture_store_ready = False
 app.include_router(auth_router)
-app.mount("/api/capture", capture_app(), name="governance-capture")
+app.mount("/api/capture", capture_app(protect_content=protect_stored_text), name="governance-capture")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[EXTENSION_ORIGIN],

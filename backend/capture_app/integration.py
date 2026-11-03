@@ -1,5 +1,7 @@
 """Mount the existing capture endpoints inside the Harness server."""
 
+from collections.abc import Awaitable, Callable
+
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 
@@ -26,10 +28,11 @@ CAPTURE_PATHS = {
 }
 
 
-def capture_app() -> FastAPI:
+def capture_app(*, protect_content: Callable[[str], Awaitable[str]] | None = None) -> FastAPI:
     from .main import app as legacy_app
 
     embedded = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    embedded.state.protect_content = protect_content
     analytics_routes = tuple(
         route for route in analytics_router.routes
         if isinstance(route, APIRoute) and route.path in CAPTURE_PATHS
