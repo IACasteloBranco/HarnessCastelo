@@ -8,7 +8,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from backend.capture_app.integration import (
+from governanca.server.capture_app.integration import (
     capture_app,
     clean_capture_store,
     initialize_capture_store,

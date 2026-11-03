@@ -1,6 +1,6 @@
 # Servidor de Governança
 
-Este diretório contém a API própria da extensão em `app.py`, as rotas de autenticação em `auth_api.py`, a inspeção local em `data_protection.py` e o adaptador do Google Sensitive Data Protection em `sensitive_data_protection.py`. Inicie o serviço com `python -m governanca.server.app`; ele não inicia o proxy do Codex.
+Este diretório contém a API própria da extensão em `app.py`, a composição das rotas compartilhadas de identidade e da inspeção em `auth_api.py`, a inspeção local em `data_protection.py` e o adaptador do Google Sensitive Data Protection em `sensitive_data_protection.py`. Inicie o serviço com `python -m governanca.server.app`; ele não inicia nem importa o proxy do Codex.
 
 A rota valida CPF e CNPJ localmente. O Google também inspeciona CPF, e-mail, telefone, nomes e características potencialmente sensíveis.
 
@@ -16,4 +16,4 @@ A regra de contexto usa infoTypes e hotwords da API Sensitive Data Protection. C
 
 O Google informa que a quantidade e o tipo de infoTypes afetam a latência e que `PERSON_NAME` pode aumentar bastante o tempo de inspeção. Como o envio depende dessa inspeção, uma chamada acima do limite configurado continua falhando de modo fechado.
 
-A extensão continua usando os caminhos `/api/auth/extension/*`, `/api/capture/*` e `/healthz`. Configure `governanca/extension/src/background/config.js` com a URL pública deste serviço quando a implantação estiver pronta. O serviço reutiliza a autenticação Harness e o banco de identidade existentes; ele não encaminha prompts para o Codex.
+A extensão continua usando os caminhos `/api/auth/extension/*`, `/api/capture/*` e `/healthz`. Configure `governanca/extension/src/background/config.js` com a URL pública deste serviço quando a implantação estiver pronta. O serviço reutiliza os contratos de autenticação e os modelos PostgreSQL de `shared/identity`; as migrações ficam em `shared/migrations`. Ele não encaminha prompts para o Codex.

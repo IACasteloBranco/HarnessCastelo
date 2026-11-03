@@ -6,7 +6,7 @@ import vm from 'node:vm';
 import {validConversationObservation} from '../src/background/capture-validation.js';
 
 const source = (await readFile(new URL('../src/background/service-worker.js', import.meta.url), 'utf8'))
-  .replace("import {CONFIG} from './config.js';", "const CONFIG = {mode: 'local', apiUrl: '', googleClientId: ''};")
+  .replace("import {CONFIG} from './config.js';", "const CONFIG = {apiUrl: 'http://127.0.0.1:18081', googleClientId: ''};")
   .replace("import {validConversationObservation} from './capture-validation.js';",
     'const validConversationObservation = globalThis.validConversationObservation;');
 const turnKey = '00000000-0000-4000-8000-000000000020';
