@@ -14,7 +14,7 @@ from cryptography.hazmat.primitives.asymmetric import ec, utils
 from cryptography.hazmat.primitives import hashes, serialization
 from fastapi import Depends, HTTPException, Request
 
-from backend.internal_auth import EmployeeInfo
+from shared.identity.auth import EmployeeInfo
 from .db import begin_write, connect, iso, utc_now
 from .security import require_capture_token, require_machine_viewer
 from .settings import Settings, get_settings

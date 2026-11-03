@@ -7,4 +7,4 @@ Este é o projeto de extensão, captura protegida e analytics da Governança nes
 
 Instale as dependências do servidor com `python -m pip install -r governanca/server/requirements.txt` e inicie-o com `python -m governanca.server.app` na raiz do repositório.
 
-`server/capture_app/` é dono dos endpoints, persistência e analytics das interações capturadas. A autenticação e os modelos de identidade PostgreSQL continuam compartilhados em `../backend/` durante esta etapa. Manter a inspeção obrigatória e as decisões de política no servidor é necessário para que as regras não dependam apenas do navegador.
+`server/capture_app/` é dono dos endpoints, persistência e analytics das interações capturadas. Os contratos de identidade e o histórico Alembic são compartilhados em `../shared/identity/` e `../shared/migrations/`. A Governança mantém a inspeção obrigatória e as decisões de política no próprio servidor, sem importar o proxy ou a análise departamental do Maximus.

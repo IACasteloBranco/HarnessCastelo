@@ -3,8 +3,8 @@ from typing import Annotated
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from backend.internal_auth import EmployeeInfo, resolve_session
-from backend.governance_access import has_governance_access
+from shared.identity.auth import EmployeeInfo, resolve_session
+from shared.identity.access import has_governance_access
 from .db import connect, record_privacy_audit
 from .settings import Settings, get_settings
 

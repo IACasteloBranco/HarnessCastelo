@@ -1,6 +1,6 @@
 # Extensão HarnessCastelo
 
-A extensão aplica a política de envio e captura prompts e respostas observados no ChatGPT e no Claude. O conteúdo, o colaborador, o departamento e os metadados de contexto são enviados ao gateway local; arquivos são registrados somente por metadados observáveis.
+A extensão aplica a política de envio e captura prompts e respostas observados no ChatGPT e no Claude. O conteúdo, o colaborador, o departamento e os metadados de contexto são enviados à API local da Governança; arquivos são registrados somente por metadados observáveis.
 
 ## Desenvolvimento local
 

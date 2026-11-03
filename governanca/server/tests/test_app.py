@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import httpx
 
-from backend.internal_auth import EmployeeInfo
+from shared.identity.auth import EmployeeInfo
 from governanca.server import inspection
 from governanca.server.app import app
 from governanca.server.auth_api import EXTENSION_ORIGIN, extension_employee

@@ -7,10 +7,10 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import select, text
 
-from backend.chat import _assistant_text
-from backend.database import (AlertOutbox, Department, Employee, PromptFinding, Run,
-                              session_factory)
-from backend.governance import current_prompt
+from maximus.backend.chat import _assistant_text
+from maximus.backend.database import (AlertOutbox, Department, Employee, PromptFinding, Run,
+                                      session_factory)
+from maximus.backend.governance import current_prompt
 
 
 CATEGORIES = {
