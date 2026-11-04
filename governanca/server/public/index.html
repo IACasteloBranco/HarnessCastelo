@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; base-uri 'none'; object-src 'none'; form-action 'self'">
+  <title>Governança de IA</title>
+  <link rel="stylesheet" href="./portal.css">
+  <script defer src="./app.js"></script>
+</head>
+<body>
+  <header><h1>Governança de IA</h1><a href="./privacidade.html" target="_blank" rel="noopener">Aviso de Privacidade</a></header>
+  <main>
+    <p id="message" role="alert" aria-live="polite"></p>
+    <section id="login-screen" hidden aria-labelledby="login-title">
+      <h2 id="login-title">Entrar</h2>
+      <form id="login-form">
+        <label>Código do colaborador <input id="employee-code" required autocomplete="username" maxlength="128"></label>
+        <label>Senha <input id="password" type="password" required autocomplete="current-password"></label>
+        <button>Entrar</button>
+      </form>
+    </section>
+    <section id="change-screen" hidden aria-labelledby="change-title">
+      <h2 id="change-title">Troca obrigatória de senha</h2>
+      <p>Antes de acessar a governança, substitua a senha temporária.</p>
+      <form id="change-form">
+        <label>Senha temporária <input id="current-password" type="password" required autocomplete="current-password"></label>
+        <label>Nova senha (mínimo 12 caracteres) <input id="new-password" type="password" required minlength="12" autocomplete="new-password"></label>
+        <button>Alterar senha</button>
+      </form>
+    </section>
+    <section id="portal-screen" hidden aria-labelledby="portal-title">
+      <h2 id="portal-title">Painel</h2>
+      <button type="button" id="logout">Sair</button>
+      <section aria-labelledby="summary-title"><h3 id="summary-title">Resumo</h3><p id="summary"></p></section>
+      <section aria-labelledby="departments-title"><h3 id="departments-title">Departamentos</h3><ul id="departments"></ul></section>
+      <section aria-labelledby="interactions-title">
+        <h3 id="interactions-title">Interações</h3>
+        <form id="search-form">
+          <label>Departamento <input id="department-code" maxlength="128"></label>
+          <label>Código do colaborador <input id="employee-id" maxlength="128"></label>
+          <label>Plataforma <select id="platform"><option value="">Todas</option><option value="chatgpt_web">ChatGPT</option><option value="claude_web">Claude</option></select></label>
+          <label>De (UTC) <input id="from-date" type="datetime-local"></label>
+          <label>Até (UTC) <input id="to-date" type="datetime-local"></label>
+          <button>Buscar</button>
+        </form>
+        <p id="interaction-count"></p><ul id="interactions"></ul>
+      </section>
+      <section aria-labelledby="investigations-title">
+        <h3 id="investigations-title">Investigações</h3>
+        <p>O acesso ao conteúdo requer aprovação por outra pessoa da governança e vínculo de colaborador.</p>
+        <form id="investigation-form">
+          <label>Finalidade (mínimo 20 caracteres) <textarea id="purpose" required minlength="20" maxlength="2000"></textarea></label>
+          <label>Código do colaborador investigado <input id="investigation-employee-code" required maxlength="128"></label>
+          <label>Códigos dos responsáveis pelo acesso, separados por vírgula <input id="viewers" required></label>
+          <button>Solicitar investigação</button>
+        </form>
+        <p id="active-case"></p><ul id="investigations"></ul>
+        <h4>Conteúdo da interação autorizada</h4><div id="detail"></div>
+      </section>
+      <section aria-labelledby="machines-title"><h3 id="machines-title">Aprovações de máquinas</h3><ul id="machines"></ul></section>
+    </section>
+  </main>
+</body>
+</html>

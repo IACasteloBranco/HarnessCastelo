@@ -21,7 +21,7 @@ from governanca.server import inspection
 class CaptureContentProtectionTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.settings = Settings(_env_file=None, app_env="local", database_url=None,
+        self.settings = Settings(_env_file=None, app_env="local", GOVERNANCA_DATABASE_URL=None,
                                  database_path=Path(self.temp.name) / "capture.sqlite3")
         initialize(self.settings)
         self.inspection = patch.object(inspection, "inspect_sensitive_data", new_callable=AsyncMock,

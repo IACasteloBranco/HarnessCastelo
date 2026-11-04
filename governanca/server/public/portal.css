@@ -1,0 +1,15 @@
+:root { font: 16px/1.5 system-ui, sans-serif; color: #153047; background: #f5f8fb; }
+body { max-width: 76rem; margin: auto; padding: 1.5rem; }
+header { display: flex; justify-content: space-between; align-items: center; }
+main { margin-top: 2rem; }
+section { background: white; padding: 1.25rem; margin: 1rem 0; border: 1px solid #d3dce5; border-radius: .5rem; }
+section section { margin: 1.5rem 0; }
+label { display: block; margin: .5rem 0; }
+input, select, textarea { display: block; box-sizing: border-box; width: min(100%, 26rem); padding: .5rem; font: inherit; }
+textarea { min-height: 6rem; }
+button { margin: .5rem .5rem .5rem 0; padding: .5rem .75rem; font: inherit; cursor: pointer; }
+li { padding: .75rem 0; border-bottom: 1px solid #ddd; overflow-wrap: anywhere; }
+li span { display: inline-block; margin-right: 1rem; }
+#detail { white-space: pre-wrap; overflow-wrap: anywhere; }
+[hidden] { display: none !important; }
+#message:not(:empty) { border-left: .25rem solid #a22; padding: .5rem; }

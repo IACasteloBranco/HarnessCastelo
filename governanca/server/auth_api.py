@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
-from shared.identity.api import (
+from governanca.server.identity.api import (
     EXTENSION_ORIGIN,
     EmployeeInfo,
     extension_employee,

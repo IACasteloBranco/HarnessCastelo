@@ -37,7 +37,8 @@ function worker({localData = {}, fetchImpl = async () => {throw new Error('unexp
   const chrome = {storage: {local: storage, session: storage},
     runtime: {getURL: path => `chrome-extension://test/${path}`,
       onMessage: {addListener: listener => {onMessage = listener;}},
-      onConnect: {addListener: () => {}}}, alarms: {create: async () => {}, onAlarm: {addListener: () => {}}}};
+      onConnect: {addListener: () => {}}}, alarms: {create: async () => {}, onAlarm: {addListener: () => {}}},
+    tabs: {query: async () => []}};
   vm.runInNewContext(source, {chrome, crypto: webcrypto, URL, TextEncoder, Uint8Array,
     AbortSignal, btoa, fetch: fetchImpl, validConversationObservation, console});
   const sender = {tab: {id: 1}, frameId: 0,
@@ -45,6 +46,20 @@ function worker({localData = {}, fetchImpl = async () => {throw new Error('unexp
   const send = (message, source = sender) => new Promise(resolve => onMessage(message, source, resolve));
   return {send, local};
 }
+
+test('temporary password login directs to governance and never starts capture', async () => {
+  const {send, local} = worker({fetchImpl: async url => {
+    if (url.endsWith('/api/auth/extension/login')) return {ok: true, json: async () => ({must_change_password: true})};
+    throw new Error('unexpected fetch');
+  }});
+  const result = await send({type: 'login', employeeCode: 'SYN-1', password: 'temporary'},
+    {url: 'chrome-extension://test/src/popup/popup.html'});
+  assert.equal(result.ok, true, result.error);
+  assert.equal(result.data.must_change_password, true);
+  assert.equal(result.data.password_change_url, 'http://127.0.0.1:18081/change-password');
+  assert.equal(local.authSession, undefined);
+  assert.equal(local.enabled, undefined);
+});
 
 test('persists bounded turn-to-interaction links and rejects foreign routes', async () => {
   const {send, local} = worker({localData: captureReadyData()});

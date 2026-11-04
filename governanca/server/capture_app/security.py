@@ -3,8 +3,9 @@ from typing import Annotated
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from shared.identity.auth import EmployeeInfo, resolve_session
-from shared.identity.access import has_governance_access
+from governanca.server.identity.auth import EmployeeInfo, resolve_session
+from governanca.server.identity.access import has_governance_access
+from governanca.server.identity.api import COOKIE_NAME
 from .db import connect, record_privacy_audit
 from .settings import Settings, get_settings
 
@@ -15,7 +16,7 @@ async def require_capture_token(
 ):
     token = credentials.credentials if credentials and credentials.scheme.lower() == "bearer" else ""
     if not token:
-        token = request.cookies.get("harness_session", "")
+        token = request.cookies.get(COOKIE_NAME, "")
         if token and request.method in {"POST", "PUT", "PATCH", "DELETE"}:
             origin = f"{request.url.scheme}://{request.url.netloc}"
             if request.headers.get("Origin") != origin:

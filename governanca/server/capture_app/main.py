@@ -22,11 +22,11 @@ from .schemas import (
     StreamCaptureCreate,
 )
 from .security import (require_analytics_operator, require_capture_token,
-                       require_content_viewer, require_operator_token)
+                       require_content_viewer, require_governance_analytics, require_operator_token)
 from .machine_identity import (Machine, enroll_machine, project_id_from_url,
                                require_machine_proof, require_machine_signature)
 from .settings import Settings, get_settings
-from shared.identity.auth import EmployeeInfo
+from governanca.server.identity.auth import EmployeeInfo
 
 def fingerprint(payload: dict) -> str:
     payload = dict(payload)
@@ -232,7 +232,7 @@ def list_machine_assignment_requests(
 @app.post("/v1/admin/machines/{installation_id}/assignment-request/approve")
 def approve_machine_assignment_request(
     installation_id: UUID,
-    scope: dict = Depends(require_analytics_operator),
+    scope: dict = Depends(require_governance_analytics),
     settings: Settings = Depends(get_settings),
 ) -> dict:
     with connect(settings) as db:
@@ -277,7 +277,7 @@ def approve_machine_assignment_request(
 @app.post("/v1/admin/machines/{installation_id}/assignment-request/reject")
 def reject_machine_assignment_request(
     installation_id: UUID,
-    scope: dict = Depends(require_analytics_operator),
+    scope: dict = Depends(require_governance_analytics),
     settings: Settings = Depends(get_settings),
 ) -> dict:
     with connect(settings) as db:
@@ -608,7 +608,7 @@ async def get_interaction(interaction_id: UUID, investigation_id: UUID, response
                           viewer["department_code"], viewer["department_code"])).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="interaction not found")
-        from shared.identity.investigations import InvestigationDenied, require_investigation_for_code
+        from governanca.server.identity.investigations import InvestigationDenied, require_investigation_for_code
         try:
             await require_investigation_for_code(viewer["actor_id"], investigation_id, row["employee_id"])
         except InvestigationDenied:
