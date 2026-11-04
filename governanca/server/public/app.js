@@ -71,9 +71,10 @@ async function investigations() {
     for (const item of cases) {
       const row = document.createElement('li');
       const description = document.createElement('span');
-      description.textContent = `${item.purpose} · ${item.status} · solicitante ${item.requested_by} · responsáveis ${(item.viewers || []).join(', ')}`;
+      description.textContent = `${item.purpose} · ${item.status} · colaborador ${item.target_employee_code || 'não definido'} · solicitante ${item.requested_by} · responsáveis ${(item.viewers || []).join(', ')}`;
       row.append(description);
-      if (item.can_approve) for (const action of ['approve', 'reject']) {
+      for (const action of ['approve', 'reject']) {
+        if (action === 'approve' ? !item.can_approve : !item.can_reject) continue;
         const button = document.createElement('button');
         button.type = 'button';
         button.textContent = action === 'approve' ? 'Aprovar' : 'Rejeitar';
@@ -85,35 +86,17 @@ async function investigations() {
         });
         row.append(button);
       }
-      if (item.can_use && Date.parse(item.expires_at) > Date.now()) {
-        if (item.target_employee_code) {
-          const button = document.createElement('button');
-          button.type = 'button';
-          button.textContent = 'Usar acesso';
-          button.addEventListener('click', async () => {
-            activeCase = item;
-            clearDetail();
-            $('active-case').textContent = `Investigação ativa para ${item.target_employee_code} até ${item.expires_at}.`;
-            await interactions();
-          });
-          row.append(button);
-        } else {
-          const input = document.createElement('input');
-          input.maxLength = 128;
-          input.setAttribute('aria-label', 'Colaborador investigado');
-          const button = document.createElement('button');
-          button.type = 'button';
-          button.textContent = 'Vincular colaborador';
-          button.addEventListener('click', async () => {
-            try {
-              await api(`/api/governance/investigations/${encodeURIComponent(item.id)}/subject`, {
-                method: 'POST', body: JSON.stringify({ employee_code: input.value.trim() }),
-              });
-              await investigations();
-            } catch (error) { errorMessage(error); }
-          });
-          row.append(input, button);
-        }
+      if (item.can_use && item.target_employee_code && Date.parse(item.expires_at) > Date.now()) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = 'Usar acesso';
+        button.addEventListener('click', async () => {
+          activeCase = item;
+          clearDetail();
+          $('active-case').textContent = `Investigação ativa para ${item.target_employee_code} até ${item.expires_at}.`;
+          await interactions();
+        });
+        row.append(button);
       }
       target.append(row);
     }
@@ -222,6 +205,7 @@ $('investigation-form').addEventListener('submit', async event => {
   try {
     await api('/api/governance/investigations', { method: 'POST', body: JSON.stringify({
       purpose: $('purpose').value.trim(),
+      employee_code: $('investigation-employee-code').value.trim(),
       viewers: $('viewers').value.split(',').map(value => value.trim()).filter(Boolean),
     }) });
     $('investigation-form').reset();
