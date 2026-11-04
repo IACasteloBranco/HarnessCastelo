@@ -69,7 +69,12 @@ $('delete-local-data').addEventListener('click', async () => {
 $('login').addEventListener('click', async () => {
   try {
     if (!currentConfig?.configured) throw new Error('URL do servidor Harness inválida.');
-    await send({type: 'login', employeeCode: $('employee-code').value.trim(), password: $('password').value});
+    const login = await send({type: 'login', employeeCode: $('employee-code').value.trim(), password: $('password').value});
+    if (login.must_change_password) {
+      await chrome.tabs.create({url: login.password_change_url});
+      $('status').textContent = 'Troque sua senha temporária na página da Governança e depois entre novamente na extensão.';
+      return;
+    }
     $('status').textContent = 'Sessão Harness iniciada. Confira a atribuição da instalação antes de ativar a captura.';
     await refresh();
   } catch (error) { $('status').textContent = error.message; }

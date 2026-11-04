@@ -26,7 +26,7 @@ from .security import (require_analytics_operator, require_capture_token,
 from .machine_identity import (Machine, enroll_machine, project_id_from_url,
                                require_machine_proof, require_machine_signature)
 from .settings import Settings, get_settings
-from shared.identity.auth import EmployeeInfo
+from governanca.server.identity.auth import EmployeeInfo
 
 def fingerprint(payload: dict) -> str:
     payload = dict(payload)
@@ -608,7 +608,7 @@ async def get_interaction(interaction_id: UUID, investigation_id: UUID, response
                           viewer["department_code"], viewer["department_code"])).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="interaction not found")
-        from shared.identity.investigations import InvestigationDenied, require_investigation_for_code
+        from governanca.server.identity.investigations import InvestigationDenied, require_investigation_for_code
         try:
             await require_investigation_for_code(viewer["actor_id"], investigation_id, row["employee_id"])
         except InvestigationDenied:

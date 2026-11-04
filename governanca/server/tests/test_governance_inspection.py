@@ -5,7 +5,7 @@ from uuid import uuid4
 import httpx
 from fastapi import FastAPI
 
-from shared.identity.auth import EmployeeInfo
+from governanca.server.identity.auth import EmployeeInfo
 from governanca.server.data_protection import Category, Finding
 from governanca.server.sensitive_data_protection import InspectionUnavailable
 from governanca.server import inspection

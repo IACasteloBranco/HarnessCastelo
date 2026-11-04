@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import httpx
 
-from shared.identity.auth import EmployeeInfo
+from governanca.server.identity.auth import EmployeeInfo
 from governanca.server import inspection
 from governanca.server.app import app
 from governanca.server.auth_api import EXTENSION_ORIGIN, extension_employee
@@ -34,6 +34,12 @@ class GovernanceAppTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inspection.status_code, 200)
         self.assertEqual(inspection.json()["action"], "allow")
         self.assertEqual(codex_proxy.status_code, 404)
+
+    async def test_portal_and_password_change_page_are_served_by_governance(self):
+        for path in ("/", "/change-password"):
+            response = await self.client.get(path)
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertIn("Governança", response.text)
 
 
 if __name__ == "__main__":

@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import unittest
@@ -15,9 +16,9 @@ from governanca.server.capture_app.db import connect, initialize, iso
 from governanca.server.capture_app.integration import CAPTURE_PATHS, capture_app
 from governanca.server.capture_app.main import app as legacy_capture_app
 from governanca.server.capture_app.settings import get_settings
-from shared.identity.database import _session_factory, session_factory
-from shared.identity.models import Department, Employee, InternalSession, Organization
-from shared.identity.auth import provision_department, provision_employee, provision_organization
+from governanca.server.identity.database import _session_factory, session_factory
+from governanca.server.identity.models import Department, Employee, GovernanceInvestigation, InternalSession, Organization
+from governanca.server.identity.auth import provision_department, provision_employee, provision_organization
 from governanca.server.app import app
 
 
@@ -51,9 +52,11 @@ class CaptureRouteMountingTests(unittest.TestCase):
 
 @unittest.skipUnless(os.environ.get("HARNESS_TEST_DATABASE_URL"), "requires a disposable PostgreSQL database")
 class CaptureGovernanceTests(unittest.IsolatedAsyncioTestCase):
+    loop_factory = asyncio.SelectorEventLoop
+
     @classmethod
     def setUpClass(cls):
-        os.environ["DATABASE_URL"] = os.environ["HARNESS_TEST_DATABASE_URL"]
+        os.environ["GOVERNANCA_DATABASE_URL"] = os.environ["HARNESS_TEST_DATABASE_URL"]
         os.environ["TOKEN_ENCRYPTION_KEY"] = Fernet.generate_key().decode()
         _session_factory.cache_clear()
         get_settings.cache_clear()
@@ -163,6 +166,7 @@ class CaptureGovernanceTests(unittest.IsolatedAsyncioTestCase):
                 employee_ids = select(Employee.id).where(Employee.organization_id == org_id)
 
                 await session.execute(delete(InternalSession).where(InternalSession.employee_id.in_(employee_ids)))
+                await session.execute(delete(GovernanceInvestigation).where(GovernanceInvestigation.organization_id == org_id))
                 await session.execute(delete(Employee).where(Employee.organization_id == org_id))
                 await session.execute(delete(Department).where(Department.organization_id == org_id))
                 await session.execute(delete(Organization).where(Organization.id == org_id))

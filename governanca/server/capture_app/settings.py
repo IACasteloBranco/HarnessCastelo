@@ -8,12 +8,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(extra="ignore")
 
     app_env: str = "local"
     app_host: str = "127.0.0.1"
     app_port: Annotated[int, Field(ge=1, le=65535)] = 8000
-    database_url: SecretStr | None = None
+    database_url: SecretStr | None = Field(default=None, validation_alias="GOVERNANCA_DATABASE_URL")
     database_path: Path = Path("./data/lab.sqlite3")
     capture_api_token: SecretStr | None = None
     operator_read_token: SecretStr | None = None
@@ -57,11 +57,11 @@ class Settings(BaseSettings):
         if self.app_env.lower() not in {"local", "lab"}:
             raise ValueError("APP_ENV must be local or lab")
         if self.app_env.lower() == "lab" and not self.uses_postgres:
-            raise ValueError("Lab requires DATABASE_URL for PostgreSQL")
+            raise ValueError("Lab requires GOVERNANCA_DATABASE_URL for PostgreSQL")
         if self.database_url:
             database_url = urlsplit(self.database_url.get_secret_value())
             if database_url.scheme != "postgresql" or not database_url.hostname or not database_url.path.strip("/"):
-                raise ValueError("DATABASE_URL must be a PostgreSQL URL with a host and database name")
+                raise ValueError("GOVERNANCA_DATABASE_URL must be a PostgreSQL URL with a host and database name")
         if self.app_env.lower() == "lab":
             required = (self.google_oauth_client_id, self.google_oauth_client_secret,
                         self.google_extension_redirect_uri, self.google_workspace_domain)

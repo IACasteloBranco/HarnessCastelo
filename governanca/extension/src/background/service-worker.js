@@ -116,7 +116,7 @@ async function internalLogin(employee_code, password) {
     if (typeof data.access_token === 'string') await fetch(`${API}/api/auth/extension/logout`, {
       method: 'POST', headers: {Authorization: `Bearer ${data.access_token}`}
     }).catch(() => {});
-    throw new Error('Entre no Maximus e altere sua senha inicial antes de acessar as IAs.');
+    return {must_change_password: true, password_change_url: new URL('/change-password', API).toString()};
   }
   if (typeof data.access_token !== 'string' || data.access_token.length < 32 ||
       !Number.isSafeInteger(data.expires_at) || data.expires_at * 1000 <= Date.now() ||
@@ -429,6 +429,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       if (!code || code.length > 128 || !password || password.length > 1024)
         throw new Error('Informe o código do colaborador e a senha.');
       const account = await internalLogin(code, password);
+      if (account.must_change_password) return account;
       await registerAndLoadMachine();
       await broadcastPolicy();
       return account;
