@@ -71,21 +71,8 @@ async function investigations() {
     for (const item of cases) {
       const row = document.createElement('li');
       const description = document.createElement('span');
-      description.textContent = `${item.purpose} · ${item.status} · colaborador ${item.target_employee_code || 'não definido'} · solicitante ${item.requested_by} · responsáveis ${(item.viewers || []).join(', ')}`;
+      description.textContent = `${item.purpose} · ${item.status} · colaborador ${item.target_employee_code || 'não definido'} · solicitante ${item.requested_by} · expira ${item.expires_at || '—'}`;
       row.append(description);
-      for (const action of ['approve', 'reject']) {
-        if (action === 'approve' ? !item.can_approve : !item.can_reject) continue;
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.textContent = action === 'approve' ? 'Aprovar' : 'Rejeitar';
-        button.addEventListener('click', async () => {
-          try {
-            await api(`/api/governance/investigations/${encodeURIComponent(item.id)}/decision/${action}`, { method: 'POST' });
-            await investigations();
-          } catch (error) { errorMessage(error); }
-        });
-        row.append(button);
-      }
       if (item.can_use && item.target_employee_code && Date.parse(item.expires_at) > Date.now()) {
         const button = document.createElement('button');
         button.type = 'button';
@@ -93,7 +80,7 @@ async function investigations() {
         button.addEventListener('click', async () => {
           activeCase = item;
           clearDetail();
-          $('active-case').textContent = `Investigação ativa para ${item.target_employee_code} até ${item.expires_at}.`;
+          $('active-case').textContent = `Acesso ativo para ${item.target_employee_code} até ${item.expires_at}.`;
           await interactions();
         });
         row.append(button);
@@ -203,13 +190,15 @@ $('search-form').addEventListener('submit', async event => {
 $('investigation-form').addEventListener('submit', async event => {
   event.preventDefault();
   try {
-    await api('/api/governance/investigations', { method: 'POST', body: JSON.stringify({
+    activeCase = await api('/api/governance/investigations', { method: 'POST', body: JSON.stringify({
       purpose: $('purpose').value.trim(),
       employee_code: $('investigation-employee-code').value.trim(),
-      viewers: $('viewers').value.split(',').map(value => value.trim()).filter(Boolean),
     }) });
+    clearDetail();
+    $('active-case').textContent = `Acesso registrado para ${activeCase.target_employee_code} até ${activeCase.expires_at}.`;
     $('investigation-form').reset();
     await investigations();
+    await interactions();
   } catch (error) { errorMessage(error); }
 });
 $('change-form').addEventListener('submit', async event => {

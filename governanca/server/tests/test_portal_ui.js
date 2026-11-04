@@ -101,8 +101,8 @@ test('analytics renders only metadata as text and filters interactions', async (
   assert.equal(p.calls.at(-1).url, '/api/capture/v1/admin/analytics/interactions?department_code=FIN');
 });
 
-test('investigation fixes its subject before approval and detail is requested', async () => {
-  let state = 'pending';
+test('access request is recorded and immediately opens scoped interaction details', async () => {
+  let created = false;
   let resolveDetail;
   let detailResponse = { prompt: { text: '<img src=x onerror=alert(1)>' }, responses: [{ text: 'answer' }] };
   const p = await portal({
@@ -113,19 +113,26 @@ test('investigation fixes its subject before approval and detail is requested', 
       interaction_id: '00000000-0000-0000-0000-000000000001', employee_id: 'EMP1',
       department_code: 'FIN', platform: 'chatgpt_web', status: 'complete', received_at: 'now',
     }], total: 1 },
-    '/api/governance/investigations': () => ({ investigations: [{ id: 'case-1',
-      purpose: '<script>bad()</script>', status: state, viewers: ['EMP1'], requested_by: 'GOV2',
-      can_approve: state === 'pending', can_reject: state === 'pending', can_use: state === 'approved',
-      target_employee_code: 'EMP1', expires_at: '2099-01-01T00:00:00Z',
-    }] }),
-    '/api/governance/investigations/case-1/decision/approve': () => { state = 'approved'; return { status: state }; },
+    '/api/governance/investigations': options => options.method === 'POST'
+      ? (created = true, { id: 'case-1', purpose: 'Apurar uso de interação reportada', status: 'approved',
+        target_employee_code: 'EMP1', requested_by: 'GOV1', can_use: true, expires_at: '2099-01-01T00:00:00Z' })
+      : { investigations: created ? [{ id: 'case-1', purpose: 'Apurar uso de interação reportada',
+        status: 'approved', viewers: ['GOV1'], requested_by: 'GOV1', can_approve: false, can_reject: false,
+        can_use: true, target_employee_code: 'EMP1', expires_at: '2099-01-01T00:00:00Z' }] : [] },
     '/api/capture/v1/interactions/00000000-0000-0000-0000-000000000001?investigation_id=case-1': () => detailResponse,
   });
   const item = p.el('interactions').children[0];
   assert.equal(item.children.at(-1).listeners.click, undefined);
-  assert.match(p.el('investigations').children[0].children[0].textContent, /^<script>bad\(\)<\/script>/);
-  await p.el('investigations').children[0].children[1].fire('click');
-  await p.el('investigations').children[0].children.at(-1).fire('click');
+  p.el('purpose').value = 'Apurar uso de interação reportada';
+  p.el('investigation-employee-code').value = 'EMP1';
+  await p.el('investigation-form').fire('submit');
+  const request = p.calls.find(call => call.url === '/api/governance/investigations' && call.options.method === 'POST');
+  assert.deepEqual(JSON.parse(request.options.body), {
+    purpose: 'Apurar uso de interação reportada', employee_code: 'EMP1',
+  });
+  assert.match(p.el('active-case').textContent, /acesso registrado para EMP1/i);
+  assert.equal(p.el('interactions').children[0].children.at(-1).textContent, 'Ver detalhe');
+  assert.equal(p.el('investigations').children[0].children.some(child => ['Aprovar', 'Rejeitar'].includes(child.textContent)), false);
   await p.el('interactions').children[0].children.at(-1).fire('click');
   assert.equal(p.el('detail').children[0].textContent, '<img src=x onerror=alert(1)>');
   detailResponse = new Promise(resolve => { resolveDetail = resolve; });
@@ -238,37 +245,29 @@ test('UTC period applies to summary, departments, and interactions', async () =>
   ].sort());
 });
 
-test('request submits purpose and viewers and rejection uses decision route', async () => {
-  let created = false;
-  let rejected = false;
+test('request submits purpose and subject without approval or viewer workflow', async () => {
   const p = await portal({
     '/api/auth/me': { role: 'governance', must_change_password: false },
     '/api/capture/v1/admin/analytics/summary': { totals: { interactions: 0, responses: 0 } },
     '/api/capture/v1/admin/analytics/departments': { departments: [] },
     '/api/capture/v1/admin/analytics/interactions': { items: [], total: 0 },
     '/api/capture/v1/admin/machines/assignment-requests': { items: [] },
-    '/api/governance/investigations': options => {
-      if (options.method === 'POST') { created = true; return { id: 'case-2' }; }
-      return { investigations: created && !rejected ? [{ id: 'case-2', purpose: 'Suspeita documentada de vazamento',
-        status: 'pending', requested_by: 'OTHER', viewers: ['GOV1'], can_approve: true, can_reject: true }] : [] };
-    },
-    '/api/governance/investigations/case-2/decision/reject': () => {
-      rejected = true; return { status: 'rejected' };
-    },
+    '/api/governance/investigations': options => options.method === 'POST'
+      ? { id: 'case-2', status: 'approved', purpose: 'Suspeita documentada de vazamento',
+        requested_by: 'GOV1', target_employee_code: 'EMP1', can_use: true, expires_at: '2099-01-01T00:00:00Z' }
+      : { investigations: [] },
   });
   p.el('purpose').value = 'Suspeita documentada de vazamento';
-  p.el('viewers').value = 'GOV1, GOV2';
   p.el('investigation-employee-code').value = 'EMP1';
   await p.el('investigation-form').fire('submit');
   const request = p.calls.find(call => call.url === '/api/governance/investigations' && call.options.method === 'POST');
   assert.deepEqual(JSON.parse(request.options.body), {
-    purpose: 'Suspeita documentada de vazamento', viewers: ['GOV1', 'GOV2'], employee_code: 'EMP1',
+    purpose: 'Suspeita documentada de vazamento', employee_code: 'EMP1',
   });
-  await p.el('investigations').children[0].children.at(-1).fire('click');
-  assert.equal(rejected, true);
+  assert.equal(p.calls.some(call => /\/decision\//.test(call.url)), false);
 });
 
-test('legacy investigation without subject can be rejected but not approved', async () => {
+test('legacy pending investigation has no in-app decision buttons', async () => {
   const p = await portal({
     '/api/auth/me': { role: 'governance', must_change_password: false },
     '/api/capture/v1/admin/analytics/summary': { totals: { interactions: 0, responses: 0 } },
@@ -280,7 +279,7 @@ test('legacy investigation without subject can be rejected but not approved', as
       can_approve: false, can_reject: true }] },
   });
   const buttons = p.el('investigations').children[0].children.filter(child => child.type === 'button');
-  assert.deepEqual(buttons.map(child => child.textContent), ['Rejeitar']);
+  assert.deepEqual(buttons.map(child => child.textContent), []);
 });
 
 test('logout prevents a pending analytics response from restoring private data', async () => {

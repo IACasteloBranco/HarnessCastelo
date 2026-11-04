@@ -98,7 +98,7 @@
     const toast = document.createElement('div');
     toast.textContent = text;
     toast.setAttribute('role', urgent ? 'alert' : 'status');
-    toast.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:2147483647;background:#182a35;color:white;padding:10px 16px;border-radius:8px;font:14px system-ui;box-shadow:0 2px 12px #0005';
+    toast.style.cssText = 'position:fixed;top:20px;right:20px;max-width:calc(100vw - 40px);z-index:2147483647;background:#182a35;color:white;padding:10px 16px;border-radius:8px;font:14px system-ui;box-shadow:0 2px 12px #0005';
     (document.body || document.documentElement).append(toast);
     setTimeout(() => toast.remove(), 8000);
   }
@@ -135,8 +135,15 @@
     if ('value' in field) {
       const prototype = field instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
       Object.getOwnPropertyDescriptor(prototype, 'value')?.set?.call(field, text);
-    } else field.textContent = text;
-    field.dispatchEvent(new InputEvent('input', {bubbles: true, inputType: 'insertText', data: null}));
+      field.dispatchEvent(new InputEvent('input', {bubbles: true, inputType: 'insertText', data: null}));
+    } else {
+      const selection = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(field);
+      selection.removeAllRanges();
+      selection.addRange(range);
+      if (!document.execCommand('insertText', false, text)) return false;
+    }
     return editorText(field) === text;
   }
   function replaySend(method, originalTarget) {
@@ -192,10 +199,19 @@
     const attachments = method === 'regenerate' ? null : globalThis.GovernancaFiles?.observe(fileRoot);
     if ((!replayingPrompt || replayingPrompt.text !== text || Date.now() - replayingPrompt.at >= 5000) && text) {
       stop(event);
+      resetGrant();
+      const decision = evaluate(text);
+      if (decision.action === 'BLOCK' || decision.action === 'REVIEW') {
+        logDecision(decision, method);
+        showNotice(messages.describe(decision), true);
+        return;
+      }
       if (inspectionPending) return;
       inspectionPending = true;
       chrome.runtime.sendMessage({type: 'inspect_sensitive_text', text: textOverride ?? editorText(editor())})
-        .then(async result => {
+        .then(async response => {
+          if (response?.ok !== true) throw new Error('Inspeção indisponível');
+          const result = response.data;
           if (result?.action === 'block') {
             showNotice('Envio bloqueado pela política de proteção de dados.', true);
             return;
@@ -215,6 +231,9 @@
               showNotice('Não foi possível atualizar o compositor com o texto mascarado. Revise e tente novamente.', true);
               return;
             }
+            resetGrant();
+            showNotice('O texto original não foi enviado. Revise a versão mascarada no compositor e clique em Enviar.', true);
+            return;
           } else if (result?.action !== 'allow') {
             showNotice('Inspeção indisponível. O envio foi bloqueado; tente novamente.', true);
             return;

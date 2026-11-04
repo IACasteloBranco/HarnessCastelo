@@ -622,7 +622,7 @@ async def get_interaction(interaction_id: UUID, investigation_id: UUID, response
             (str(interaction_id),),
         ).fetchall()
         record_privacy_audit(db, "content_read", viewer["actor_sub"],
-                             f"GET /v1/interactions/{{interaction_id}} investigation={investigation_id}", 1)
+                             f"GET /v1/interactions/{interaction_id} investigation={investigation_id}", 1)
     return InteractionDetail(
         interaction_id=row["interaction_id"],
         client_event_id=row["client_event_id"],

@@ -53,6 +53,13 @@ class DataProtectionTests(unittest.TestCase):
         self.assertIn(Category.PHONE, [item.category for item in result.findings])
         self.assertEqual(result.text, "[EMAIL_1] e [EMAIL_2]")
 
+    def test_allowed_cnpj_is_not_partially_masked_as_phone(self):
+        text = "CNPJ 11.222.333/0001-81"
+        start = text.index("11.222.333")
+        result = inspect(text, self.policy(CNPJ="allow"), policy_version="synthetic-1",
+                         additional_findings=(Finding(Category.PHONE, start, start + 10),))
+        self.assertEqual(result.text, text)
+
     def test_policy_is_separate_and_block_has_precedence_even_inside_email(self):
         text = "12345678909@example.invalid"
         self.assertEqual(self.inspect(text, CPF="block").action, Action.BLOCK)

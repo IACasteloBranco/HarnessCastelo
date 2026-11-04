@@ -102,7 +102,7 @@ class IndependentIdentityTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("HttpOnly", success.headers["set-cookie"])
             self.assertNotIn(secret, success.text)
 
-    async def test_independent_approval_scopes_subject_and_viewer(self):
+    async def test_access_request_is_immediately_granted_and_scoped_to_requester(self):
         from governanca.server.identity import auth, database, investigations
         from governanca.server.identity.models import Employee
 
@@ -123,12 +123,12 @@ class IndependentIdentityTests(unittest.IsolatedAsyncioTestCase):
             await auth.change_password(token, passwords[code], "changed-password-123")
             identities[code] = (await auth.resolve_session(token)).employee_id
         requested = await investigations.request_investigation(
-            identities["viewer"], "Investigation of individual capture", ["viewer" + suffix], "subject" + suffix)
-        pending = await investigations.list_investigations(identities["approver"])
-        self.assertEqual(pending[0]["target_employee_code"], "subject" + suffix)
-        with self.assertRaises(investigations.InvestigationDenied):
-            await investigations.decide_investigation(identities["viewer"], requested["id"], True)
-        await investigations.decide_investigation(identities["approver"], requested["id"], True)
+            identities["viewer"], "Investigation of individual capture", "subject" + suffix)
+        listed = await investigations.list_investigations(identities["viewer"])
+        self.assertEqual(listed[0]["target_employee_code"], "subject" + suffix)
+        self.assertTrue(listed[0]["can_use"])
+        self.assertFalse(listed[0]["can_approve"])
+        self.assertFalse(listed[0]["can_reject"])
         async with database.session_factory()() as session:
             subject = await session.scalar(select(Employee).where(Employee.code == "subject" + suffix))
             other = await session.scalar(select(Employee).where(Employee.code == "other" + suffix))
@@ -153,7 +153,7 @@ class IndependentIdentityTests(unittest.IsolatedAsyncioTestCase):
         employee = await auth.resolve_session(token)
         self.assertTrue(employee.must_change_password)
         with self.assertRaises(investigations.InvestigationDenied):
-            await investigations.request_investigation(employee.employee_id, "Specific investigative purpose", [requester], requester)
+            await investigations.request_investigation(employee.employee_id, "Specific investigative purpose", requester)
         self.assertTrue(await auth.change_password(token, temporary, "replaced-password-123"))
         self.assertFalse((await auth.resolve_session(token)).must_change_password)
         self.assertIsNone(await auth.login(requester, temporary))

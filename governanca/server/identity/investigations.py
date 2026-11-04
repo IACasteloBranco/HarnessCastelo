@@ -1,4 +1,4 @@
-"""Approval and scope for exceptional Governança reads."""
+"""Purpose records and scope for exceptional Governança reads."""
 
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
@@ -13,46 +13,33 @@ class InvestigationDenied(Exception):
     pass
 
 
-class InvestigationNotFound(Exception):
-    pass
-
-
-class InvestigationConflict(Exception):
-    pass
-
-
 def _active(actor: Employee | None) -> bool:
     return bool(actor and actor.role == "governance" and not actor.disabled
                 and not actor.must_change_password)
 
 
-async def request_investigation(actor_id: UUID, purpose: str, viewer_codes: list[str], employee_code: str) -> dict:
+async def request_investigation(actor_id: UUID, purpose: str, employee_code: str) -> dict:
     purpose = purpose.strip()
-    if len(purpose) < 20 or len(purpose) > 2000 or not viewer_codes or len(viewer_codes) > 10:
-        raise ValueError("A finalidade e os responsáveis pelo acesso são obrigatórios.")
-    if len(set(viewer_codes)) != len(viewer_codes):
-        raise ValueError("Há responsáveis repetidos.")
+    if len(purpose) < 20 or len(purpose) > 2000:
+        raise ValueError("A finalidade é obrigatória e deve ter entre 20 e 2000 caracteres.")
     async with session_factory()() as session, session.begin():
         actor = await session.get(Employee, actor_id)
         if actor is None or not _active(actor):
             raise InvestigationDenied
-        viewers = (await session.scalars(select(Employee).where(
-            Employee.code.in_(viewer_codes), Employee.organization_id == actor.organization_id,
-            Employee.role == "governance", Employee.disabled.is_(False)))).all()
-        if len(viewers) != len(viewer_codes):
-            raise ValueError("Todos os responsáveis devem pertencer à governança da empresa.")
         subject = await session.scalar(select(Employee).where(
             Employee.code == employee_code, Employee.organization_id == actor.organization_id))
         if subject is None:
             raise ValueError("Colaborador investigado não encontrado na empresa.")
+        now = datetime.now(timezone.utc)
         case = GovernanceInvestigation(
             id=uuid4(), organization_id=actor.organization_id, requested_by=actor.id,
-            purpose=purpose, viewer_ids=[str(viewer.id) for viewer in viewers], status="pending",
-            target_employee_id=subject.id,
-            created_at=datetime.now(timezone.utc))
+            purpose=purpose, viewer_ids=[str(actor.id)], status="approved", target_employee_id=subject.id,
+            approved_by=actor.id, created_at=now, decided_at=now, expires_at=now + timedelta(hours=1))
         session.add(case)
         return {"id": case.id, "status": case.status, "purpose": case.purpose,
-                "viewers": viewer_codes, "employee_code": subject.code, "created_at": case.created_at}
+                "requested_by": actor.code, "viewers": [actor.code], "employee_code": subject.code,
+                "target_employee_code": subject.code, "can_use": True,
+                "expires_at": case.expires_at, "created_at": case.created_at}
 
 
 async def list_investigations(actor_id: UUID) -> list[dict]:
@@ -70,59 +57,14 @@ async def list_investigations(actor_id: UUID) -> list[dict]:
                  "viewers": [codes.get(item, item) for item in case.viewer_ids],
                  "target_employee_code": codes.get(str(case.target_employee_id)),
                  "approved_by": codes.get(str(case.approved_by)),
-                 "can_approve": case.status == "pending" and case.target_employee_id is not None
-                     and case.requested_by != actor.id
-                     and str(actor.id) not in case.viewer_ids,
-                 "can_reject": case.status == "pending" and case.requested_by != actor.id
-                     and str(actor.id) not in case.viewer_ids,
+                 "can_approve": False,
+                 "can_reject": False,
                  "can_use": case.status == "approved" and case.target_employee_id is not None
                      and case.expires_at is not None
                      and case.expires_at > datetime.now(timezone.utc)
                      and str(actor.id) in case.viewer_ids,
                  "expires_at": case.expires_at,
                  "created_at": case.created_at} for case in cases]
-
-
-async def decide_investigation(actor_id: UUID, case_id: UUID, approve: bool) -> dict:
-    async with session_factory()() as session, session.begin():
-        actor = await session.get(Employee, actor_id)
-        if actor is None or not _active(actor):
-            raise InvestigationDenied
-        case = await session.scalar(select(GovernanceInvestigation).where(
-            GovernanceInvestigation.id == case_id).with_for_update())
-        if case is None or case.organization_id != actor.organization_id:
-            raise InvestigationNotFound
-        if case.status != "pending" or (approve and case.target_employee_id is None):
-            raise InvestigationConflict
-        if case.requested_by == actor.id or str(actor.id) in case.viewer_ids:
-            raise InvestigationDenied
-        now = datetime.now(timezone.utc)
-        case.status = "approved" if approve else "rejected"
-        case.approved_by = actor.id
-        case.decided_at = now
-        case.expires_at = now + timedelta(hours=1) if approve else None
-        return {"id": case.id, "status": case.status, "expires_at": case.expires_at}
-
-
-async def select_subject(actor_id: UUID, case_id: UUID, employee_code: str) -> dict:
-    async with session_factory()() as session, session.begin():
-        actor = await session.get(Employee, actor_id)
-        case = await session.scalar(select(GovernanceInvestigation).where(
-            GovernanceInvestigation.id == case_id).with_for_update())
-        if actor is None or not _active(actor) or case is None or case.organization_id != actor.organization_id:
-            raise InvestigationDenied
-        if (case.status != "approved" or case.expires_at is None
-                or case.expires_at <= datetime.now(timezone.utc)
-                or str(actor.id) not in case.viewer_ids):
-            raise InvestigationDenied
-        subject = await session.scalar(select(Employee).where(
-            Employee.code == employee_code, Employee.organization_id == actor.organization_id))
-        if subject is None:
-            raise InvestigationNotFound
-        if case.target_employee_id is not None and case.target_employee_id != subject.id:
-            raise InvestigationConflict
-        case.target_employee_id = subject.id
-        return {"id": case.id, "employee_code": subject.code, "expires_at": case.expires_at}
 
 
 async def require_investigation(actor_id: UUID, case_id: UUID, subject_id: UUID) -> None:
