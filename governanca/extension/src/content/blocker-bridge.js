@@ -105,21 +105,28 @@
   function confirmMaskedText(text, categories) {
     return new Promise(resolve => {
       const dialog = document.createElement('dialog');
+      dialog.className = 'governanca-mask-dialog';
       dialog.setAttribute('aria-labelledby', 'governanca-preview-title');
-      dialog.style.cssText = 'max-width:min(680px,90vw);max-height:80vh;border:0;border-radius:12px;padding:24px;color:#182a35;box-shadow:0 8px 32px #0005;font:14px system-ui';
+      dialog.style.cssText = 'width:min(680px,calc(100vw - 32px));max-height:85vh;overflow:auto;border:1px solid #d6c7a5;border-top:5px solid #c9a86b;border-radius:16px;padding:24px;color:#102f4a;background:#fffdf8;box-shadow:0 20px 64px #102f4a40;font:15px/1.55 "Segoe UI",Arial,sans-serif';
       const title = document.createElement('h2');
       title.id = 'governanca-preview-title'; title.textContent = 'Revise os dados protegidos';
+      title.style.cssText = 'margin:0 0 12px;color:#102f4a;font-size:1.3rem;line-height:1.25';
       const detail = document.createElement('p');
       detail.textContent = `Encontramos ${categories.join(', ')}. O envio usará apenas o texto abaixo, com esses dados substituídos.`;
+      detail.style.cssText = 'margin:0 0 16px;color:#526579';
       const preview = document.createElement('pre');
       preview.textContent = text;
-      preview.style.cssText = 'max-height:45vh;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:#f3f5f6;padding:12px;border-radius:8px';
+      preview.style.cssText = 'max-height:45vh;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:#f5f1e8;border:1px solid #e7decd;border-left:4px solid #c9a86b;padding:14px;border-radius:8px;color:#183248;font:14px/1.6 "Segoe UI",Arial,sans-serif';
       const actions = document.createElement('div');
-      actions.style.cssText = 'display:flex;justify-content:flex-end;gap:8px';
+      actions.style.cssText = 'display:flex;justify-content:flex-end;flex-wrap:wrap;gap:10px;margin-top:18px';
       const cancel = document.createElement('button');
+      cancel.className = 'governanca-mask-cancel';
       cancel.type = 'button'; cancel.textContent = 'Voltar e editar';
+      cancel.style.cssText = 'min-height:44px;padding:9px 14px;border:1px solid #cbd3d8;border-radius:8px;background:#fff;color:#183248;font:600 14px "Segoe UI",Arial,sans-serif;cursor:pointer';
       const confirm = document.createElement('button');
+      confirm.className = 'governanca-mask-confirm';
       confirm.type = 'button'; confirm.textContent = 'Enviar texto mascarado';
+      confirm.style.cssText = 'min-height:44px;padding:9px 16px;border:1px solid #102f4a;border-radius:8px;background:#102f4a;color:#fff;font:700 14px "Segoe UI",Arial,sans-serif;cursor:pointer';
       actions.append(cancel, confirm); dialog.append(title, detail, preview, actions);
       const finish = approved => { dialog.close(); dialog.remove(); resolve(approved); };
       cancel.addEventListener('click', () => finish(false));

@@ -10,7 +10,7 @@ from psycopg.rows import dict_row
 
 from .settings import Settings
 
-SCHEMA_VERSION = "1.1"
+SCHEMA_VERSION = "1.2"
 
 
 def utc_now() -> datetime:
@@ -72,6 +72,27 @@ def begin_write(db: Any, *tables: str) -> None:
         db.execute("BEGIN IMMEDIATE")
 
 
+def _create_employee_views(db: Any) -> None:
+    db.execute("""CREATE OR REPLACE VIEW employees AS
+        SELECT employee.code AS employee_id, employee.code AS person_name,
+               department.code AS department_code,
+               CASE WHEN employee.disabled THEN 0 ELSE 1 END::SMALLINT AS active,
+               employee.created_at AS created_at, employee.created_at AS updated_at,
+               employee.organization_id
+        FROM public.employees AS employee
+        JOIN public.departments AS department ON department.id = employee.department_id
+        WHERE employee.role IN ('collaborator', 'auditor')""")
+    db.execute("""CREATE OR REPLACE VIEW machine_assignment_employees AS
+        SELECT employee.code AS employee_id, employee.code AS person_name,
+               department.code AS department_code,
+               CASE WHEN employee.disabled THEN 0 ELSE 1 END::SMALLINT AS active,
+               employee.created_at AS created_at, employee.created_at AS updated_at,
+               employee.organization_id
+        FROM public.employees AS employee
+        JOIN public.departments AS department ON department.id = employee.department_id
+        WHERE employee.role IN ('collaborator', 'auditor', 'governance')""")
+
+
 def _initialize_postgres(db: Any) -> None:
     db.execute("SELECT pg_advisory_xact_lock(hashtext(?))", ("governanca-schema",))
     db.execute("CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, applied_at TEXT NOT NULL)")
@@ -109,21 +130,19 @@ def _initialize_postgres(db: Any) -> None:
                 not {"organization_id"}.issubset(view_columns.get("employees", set())) or
                 not {"organization_id"}.issubset(view_columns.get("departments", set()))):
             raise RuntimeError("PostgreSQL shared employee views are missing")
+        _create_employee_views(db)
+        return
+    if "1.1" in applied:
+        _create_employee_views(db)
+        db.execute("INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                   (SCHEMA_VERSION, iso(utc_now())))
         return
     if "1.0" in applied:
         db.execute("""CREATE OR REPLACE VIEW departments AS
             SELECT code AS department_code, name AS department_name, 1::SMALLINT AS active,
                    created_at AS created_at, created_at AS updated_at, id AS department_id, organization_id
             FROM public.departments""")
-        db.execute("""CREATE OR REPLACE VIEW employees AS
-            SELECT employee.code AS employee_id, employee.code AS person_name,
-                   department.code AS department_code,
-                   CASE WHEN employee.disabled THEN 0 ELSE 1 END::SMALLINT AS active,
-                   employee.created_at AS created_at, employee.created_at AS updated_at,
-                   employee.organization_id
-            FROM public.employees AS employee
-            JOIN public.departments AS department ON department.id = employee.department_id
-            WHERE employee.role IN ('collaborator', 'auditor')""")
+        _create_employee_views(db)
         db.execute("INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                    (SCHEMA_VERSION, iso(utc_now())))
         return
@@ -217,6 +236,7 @@ def _initialize_postgres(db: Any) -> None:
     )
     for statement in statements:
         db.execute(statement)
+    _create_employee_views(db)
     now = iso(utc_now())
     for version in ("0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9", SCHEMA_VERSION):
         db.execute(
@@ -254,7 +274,7 @@ def _verify_postgres(db: Any) -> None:
     views = {row["table_name"] for row in db.execute(
         "SELECT table_name FROM information_schema.views WHERE table_schema = current_schema()"
     ).fetchall()}
-    if not {"employees", "departments"}.issubset(views):
+    if not {"employees", "departments", "machine_assignment_employees"}.issubset(views):
         raise RuntimeError("PostgreSQL shared employee views are missing")
 
 

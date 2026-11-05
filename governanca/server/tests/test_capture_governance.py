@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import unittest
@@ -15,13 +16,24 @@ from governanca.server.capture_app.db import connect, initialize, iso
 from governanca.server.capture_app.integration import CAPTURE_PATHS, capture_app
 from governanca.server.capture_app.main import app as legacy_capture_app
 from governanca.server.capture_app.settings import get_settings
-from shared.identity.database import _session_factory, session_factory
-from shared.identity.models import Department, Employee, InternalSession, Organization
-from shared.identity.auth import provision_department, provision_employee, provision_organization
+from governanca.server.identity.database import _session_factory, session_factory
+from governanca.server.identity.models import Department, Employee, GovernanceInvestigation, InternalSession, Organization
+from governanca.server.identity.auth import provision_department, provision_employee, provision_organization
 from governanca.server.app import app
 
 
 class CaptureRouteMountingTests(unittest.TestCase):
+    def test_governance_department_analytics_is_mounted(self):
+        route = next((route for route in analytics_router.routes
+                      if isinstance(route, APIRoute)
+                      and route.path == "/v1/admin/analytics/departments"), None)
+        self.assertIsNotNone(route)
+        self.assertIn("/v1/admin/analytics/departments", CAPTURE_PATHS)
+        mounted = [route for route in capture_app().router.routes
+                   if isinstance(route, APIRoute)
+                   and route.path == "/v1/admin/analytics/departments"]
+        self.assertEqual(len(mounted), 1)
+
     def test_analytics_router_is_canonical_when_legacy_route_conflicts(self):
         analytics_route = next(route for route in analytics_router.routes
                                if isinstance(route, APIRoute)
@@ -40,9 +52,11 @@ class CaptureRouteMountingTests(unittest.TestCase):
 
 @unittest.skipUnless(os.environ.get("HARNESS_TEST_DATABASE_URL"), "requires a disposable PostgreSQL database")
 class CaptureGovernanceTests(unittest.IsolatedAsyncioTestCase):
+    loop_factory = asyncio.SelectorEventLoop
+
     @classmethod
     def setUpClass(cls):
-        os.environ["DATABASE_URL"] = os.environ["HARNESS_TEST_DATABASE_URL"]
+        os.environ["GOVERNANCA_DATABASE_URL"] = os.environ["HARNESS_TEST_DATABASE_URL"]
         os.environ["TOKEN_ENCRYPTION_KEY"] = Fernet.generate_key().decode()
         _session_factory.cache_clear()
         get_settings.cache_clear()
@@ -120,6 +134,25 @@ class CaptureGovernanceTests(unittest.IsolatedAsyncioTestCase):
                      "synthetic response", "complete", timestamp, timestamp),
                 )
 
+    async def test_governance_employee_can_be_assigned_to_department_for_capture(self):
+        code = f"governance-{uuid4().hex}"
+        await provision_employee(self.org, code, "governance", self.department)
+
+        with connect(get_settings()) as db:
+            row = db.execute(
+                "SELECT employee_id, department_code, active FROM machine_assignment_employees WHERE employee_id = ?",
+                (code,),
+            ).fetchone()
+
+        if row is None:
+            self.fail("governance employee missing from capture assignment directory")
+        self.assertEqual((row["employee_id"], row["department_code"], row["active"]),
+                         (code, self.department, 1))
+        with connect(get_settings()) as db:
+            self.assertIsNone(db.execute(
+                "SELECT employee_id FROM employees WHERE employee_id = ?", (code,),
+            ).fetchone())
+
     async def asyncTearDown(self):
         for client in getattr(self, "clients", {}).values():
             await client.aclose()
@@ -133,6 +166,7 @@ class CaptureGovernanceTests(unittest.IsolatedAsyncioTestCase):
                 employee_ids = select(Employee.id).where(Employee.organization_id == org_id)
 
                 await session.execute(delete(InternalSession).where(InternalSession.employee_id.in_(employee_ids)))
+                await session.execute(delete(GovernanceInvestigation).where(GovernanceInvestigation.organization_id == org_id))
                 await session.execute(delete(Employee).where(Employee.organization_id == org_id))
                 await session.execute(delete(Department).where(Department.organization_id == org_id))
                 await session.execute(delete(Organization).where(Organization.id == org_id))
@@ -144,6 +178,7 @@ class CaptureGovernanceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(keys), len(set(keys)))
         self.assertTrue(all(route.path in CAPTURE_PATHS for route in routes))
         self.assertIn(("/v1/admin/analytics/summary", frozenset({"GET"})), keys)
+        self.assertIn(("/v1/admin/analytics/departments", frozenset({"GET"})), keys)
         self.assertIn(("/v1/admin/analytics/interactions", frozenset({"GET"})), keys)
 
     async def test_governance_capture_access_is_scoped_and_audited(self):
@@ -161,6 +196,8 @@ class CaptureGovernanceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(auditor_summary.status_code, 200, auditor_summary.text)
         self.assertNotIn("by_employee", auditor_summary.json())
         self.assertEqual((await self.clients["denied"].get(
+            "/api/capture/v1/admin/analytics/departments")).status_code, 403)
+        self.assertEqual((await self.clients["denied"].get(
             "/api/capture/v1/admin/analytics/interactions")).status_code, 403)
 
         client = self.clients["viewer"]
@@ -168,6 +205,21 @@ class CaptureGovernanceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(summary.status_code, 200, summary.text)
         self.assertEqual({row["department_code"] for row in summary.json()["by_department"]},
                          {self.department, self.other_department})
+        department_analytics = await client.get(
+            "/api/capture/v1/admin/analytics/departments",
+            params={"from": "2026-10-30T00:00:00Z", "to": "2026-10-31T00:00:00Z"},
+        )
+        self.assertEqual(department_analytics.status_code, 200, department_analytics.text)
+        analytics_rows = department_analytics.json()["departments"]
+        self.assertEqual(
+            {(row["department_code"], row["platform"], row["interactions"])
+             for row in analytics_rows},
+            {(self.department, "chatgpt_web", 2), (self.department, "claude_web", 1),
+             (self.other_department, "chatgpt_web", 1)},
+        )
+        self.assertNotIn(self.viewer, str(department_analytics.json()))
+        self.assertNotIn("employee_id", str(department_analytics.json()))
+        self.assertNotIn("person_name", str(department_analytics.json()))
         params = {
             "employee_id": self.viewer,
             "platform": "chatgpt_web",

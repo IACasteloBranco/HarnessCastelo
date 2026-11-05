@@ -10,6 +10,7 @@ from .db import clean_expired, initialize
 from .settings import get_settings
 
 CAPTURE_PATHS = {
+    "/v1/admin/analytics/departments",
     "/v1/admin/analytics/summary",
     "/v1/admin/analytics/interactions",
     "/v1/admin/machines/assignment-requests",

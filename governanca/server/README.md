@@ -16,4 +16,4 @@ A regra de contexto usa infoTypes e hotwords da API Sensitive Data Protection. C
 
 O Google informa que a quantidade e o tipo de infoTypes afetam a latência e que `PERSON_NAME` pode aumentar bastante o tempo de inspeção. Como o envio depende dessa inspeção, uma chamada acima do limite configurado continua falhando de modo fechado.
 
-A extensão continua usando os caminhos `/api/auth/extension/*`, `/api/capture/*` e `/healthz`. Configure `governanca/extension/src/background/config.js` com a URL pública deste serviço quando a implantação estiver pronta. O serviço reutiliza os contratos de autenticação e os modelos PostgreSQL de `shared/identity`; as migrações ficam em `shared/migrations`. Ele não encaminha prompts para o Codex.
+A extensão continua usando os caminhos `/api/auth/extension/*`, `/api/capture/*` e `/healthz`. Configure `governanca/extension/src/background/config.js` com a URL pública deste serviço quando a implantação estiver pronta. Identidade, investigações e migrações pertencem à Governança, com banco próprio; não dependa das tabelas nem do processo do Maximus. Ele não encaminha prompts para o Codex.

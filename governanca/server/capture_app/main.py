@@ -26,7 +26,7 @@ from .security import (require_analytics_operator, require_capture_token,
 from .machine_identity import (Machine, enroll_machine, project_id_from_url,
                                require_machine_proof, require_machine_signature)
 from .settings import Settings, get_settings
-from shared.identity.auth import EmployeeInfo
+from governanca.server.identity.auth import EmployeeInfo
 
 def fingerprint(payload: dict) -> str:
     payload = dict(payload)
@@ -154,7 +154,7 @@ def request_machine_assignment(installation_id: UUID, payload: MachineAssignment
     with connect(settings) as db:
         begin_write(db, "machines")
         employee = db.execute(
-            """SELECT e.person_name, e.department_code FROM employees e
+            """SELECT e.person_name, e.department_code FROM machine_assignment_employees e
                JOIN departments d ON d.department_code = e.department_code
                    AND d.organization_id = e.organization_id
                WHERE e.employee_id = ? AND e.active = 1 AND d.active = 1""",
@@ -208,7 +208,7 @@ def list_machine_assignment_requests(
                       d.department_name, d.active AS department_active
                FROM machines m
                JOIN public.employees AS shared_employee ON shared_employee.code = m.requested_employee_id
-               LEFT JOIN employees e ON e.employee_id = m.requested_employee_id
+               LEFT JOIN machine_assignment_employees e ON e.employee_id = m.requested_employee_id
                    AND e.organization_id = shared_employee.organization_id
                LEFT JOIN departments d ON d.department_code = e.department_code
                    AND d.organization_id = shared_employee.organization_id
@@ -244,7 +244,7 @@ def approve_machine_assignment_request(
                       shared_employee.organization_id
                FROM machines m
                LEFT JOIN public.employees AS shared_employee ON shared_employee.code = m.requested_employee_id
-               LEFT JOIN employees e ON e.employee_id = m.requested_employee_id
+               LEFT JOIN machine_assignment_employees e ON e.employee_id = m.requested_employee_id
                    AND e.organization_id = shared_employee.organization_id
                LEFT JOIN departments d ON d.department_code = e.department_code
                    AND d.organization_id = shared_employee.organization_id
@@ -287,7 +287,7 @@ def reject_machine_assignment_request(
                       shared_employee.organization_id
                FROM machines m
                LEFT JOIN public.employees AS shared_employee ON shared_employee.code = m.requested_employee_id
-               LEFT JOIN employees e ON e.employee_id = m.requested_employee_id
+               LEFT JOIN machine_assignment_employees e ON e.employee_id = m.requested_employee_id
                    AND e.organization_id = shared_employee.organization_id
                WHERE m.installation_id = ?
                  AND shared_employee.organization_id = (SELECT id FROM public.organizations WHERE code = ?)""",
@@ -608,7 +608,7 @@ async def get_interaction(interaction_id: UUID, investigation_id: UUID, response
                           viewer["department_code"], viewer["department_code"])).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="interaction not found")
-        from shared.identity.investigations import InvestigationDenied, require_investigation_for_code
+        from governanca.server.identity.investigations import InvestigationDenied, require_investigation_for_code
         try:
             await require_investigation_for_code(viewer["actor_id"], investigation_id, row["employee_id"])
         except InvestigationDenied:

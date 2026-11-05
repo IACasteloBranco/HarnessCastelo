@@ -6,7 +6,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from .db import connect, iso, record_privacy_audit
-from .security import require_analytics_operator, require_content_viewer
+from .security import require_analytics_operator, require_content_viewer, require_governance_analytics
 from .settings import Settings, get_settings
 
 
@@ -136,6 +136,42 @@ def analytics_summary(
     if scope["role"] == "governance":
         result["by_employee"] = employees
     return result
+
+
+@router.get("/departments")
+def department_analytics(
+    response: Response,
+    start: datetime | None = Query(default=None, alias="from"),
+    end: datetime | None = Query(default=None, alias="to"),
+    scope: dict = Depends(require_governance_analytics),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    start, end = _normalize_period(start, end)
+    where, values = _interaction_filter(scope["organization_code"], None, start, end)
+    with connect(settings) as db:
+        rows = db.execute(
+            f"""SELECT
+                    COALESCE(i.department_code, 'unknown') AS department_code,
+                    MAX(COALESCE(d.department_name, i.department_code, 'Não atribuído')) AS department_name,
+                    i.platform,
+                    COUNT(DISTINCT i.interaction_id) AS interactions,
+                    COUNT(r.response_id) AS responses,
+                    SUM(CASE WHEN r.capture_status = 'complete' THEN 1 ELSE 0 END) AS complete_responses,
+                    SUM(CASE WHEN r.capture_status = 'incomplete' THEN 1 ELSE 0 END) AS incomplete_responses
+                FROM interactions i
+                LEFT JOIN responses r ON r.interaction_id = i.interaction_id
+                LEFT JOIN departments d ON d.department_code = i.department_code
+                    AND d.organization_id = (SELECT id FROM public.organizations WHERE code = ?)
+                WHERE {where}
+                GROUP BY COALESCE(i.department_code, 'unknown'), i.platform
+                ORDER BY department_name, i.platform""",
+            [scope["organization_code"], *values],
+        ).fetchall()
+    return {
+        "period": {"from": iso(start) if start else None, "to": iso(end) if end else None},
+        "departments": [dict(row) for row in rows],
+    }
 
 
 @router.get("/interactions")
