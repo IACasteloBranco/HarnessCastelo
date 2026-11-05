@@ -92,8 +92,12 @@ test('analytics renders only metadata as text and filters interactions', async (
     '/api/capture/v1/admin/machines/assignment-requests': { items: [] },
   });
   assert.match(p.el('summary').textContent, /3/);
-  assert.equal(p.el('departments').children[0].children[0].textContent,
-    '<img src=x onerror=alert(1)>');
+  const department = p.el('departments').children[0];
+  assert.equal(department.children[0].textContent, '<img src=x onerror=alert(1)>');
+  assert.deepEqual(department.children[1].children.map(group =>
+    group.children.map(cell => cell.textContent)), [
+    ['Código', 'FIN'], ['Plataforma', 'chatgpt_web'], ['Interações', '3'], ['Respostas', '2'],
+  ]);
   p.el('department-code').value = 'FIN';
   await p.el('search-form').fire('submit');
   assert.equal(p.el('interactions').children.length, 1);

@@ -40,6 +40,28 @@ function rows(id, items, fields) {
     target.append(row);
   }
 }
+function departmentRows(items) {
+  const target = $('departments');
+  target.replaceChildren();
+  for (const item of items) {
+    const row = document.createElement('li');
+    const title = document.createElement('strong');
+    title.textContent = String(item.department_name ?? item.department_code ?? '');
+    const facts = document.createElement('dl');
+    for (const [label, value] of [['Código', item.department_code], ['Plataforma', item.platform],
+      ['Interações', item.interactions], ['Respostas', item.responses]]) {
+      const group = document.createElement('div');
+      const term = document.createElement('dt');
+      term.textContent = label;
+      const detail = document.createElement('dd');
+      detail.textContent = String(value ?? '');
+      group.append(term, detail);
+      facts.append(group);
+    }
+    row.append(title, facts);
+    target.append(row);
+  }
+}
 async function detail(interactionId) {
   clearDetail();
   const version = detailVersion;
@@ -151,7 +173,7 @@ async function analytics() {
     ]);
     if (version !== analyticsVersion || $('portal-screen').hidden) return;
     $('summary').textContent = `Interações: ${summary.totals.interactions} · Respostas: ${summary.totals.responses}`;
-    rows('departments', departments.departments, ['department_name', 'department_code', 'platform', 'interactions', 'responses']);
+    departmentRows(departments.departments);
     await interactions();
   } catch (error) { errorMessage(error); }
 }

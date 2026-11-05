@@ -172,6 +172,7 @@ test('clique e Enter enviam a prévia mascarada somente após confirmação', as
   const listeners = new Map();
   const attributes = new Map();
   const previews = [];
+  const dialogs = [];
   const field = {textContent: 'CPF 123.456.789-09', contains: target => target === field,
     closest: () => form, focus() {}, dispatchEvent() {}, get innerText() { return this.textContent; }};
   const form = {contains: () => true, querySelectorAll: () => [button]};
@@ -191,6 +192,7 @@ test('clique e Enter enviam a prévia mascarada somente após confirmação', as
     querySelector: selector => selector === '#prompt-textarea' ? field : null, querySelectorAll: () => [],
     createElement: tag => {
       const node = makeNode(tag);
+      if (tag === 'dialog') dialogs.push(node);
       if (tag === 'button') node.click = () => node.clickListener?.();
       node.addEventListener = (type, listener) => { node[`${type}Listener`] = listener; };
       return node;
@@ -218,6 +220,9 @@ test('clique e Enter enviam a prévia mascarada somente após confirmação', as
   assert.equal(click.prevented, true);
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.deepEqual(previews, ['CPF [CPF_1]']);
+  assert.equal(dialogs[0].className, 'governanca-mask-dialog');
+  assert.match(dialogs[0].style.cssText, /#102f4a/);
+  assert.equal(dialogs[0].children[3].children[1].className, 'governanca-mask-confirm');
   assert.equal(field.textContent, 'CPF [CPF_1]');
   assert.equal(captures, 1);
   assert.equal(attributes.get('data-governanca-block-prompts'), 'allow');

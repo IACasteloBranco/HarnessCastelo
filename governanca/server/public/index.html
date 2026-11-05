@@ -9,7 +9,13 @@
   <script defer src="./app.js"></script>
 </head>
 <body>
-  <header><h1>Governança de IA</h1><a href="./privacidade.html" target="_blank" rel="noopener">Aviso de Privacidade</a></header>
+  <header>
+    <div class="portal-brand">
+      <img src="./castelo-footer-logo.png" alt="">
+      <h1>Governança de IA</h1>
+    </div>
+    <a href="./privacidade.html" target="_blank" rel="noopener">Aviso de Privacidade</a>
+  </header>
   <main>
     <p id="message" role="alert" aria-live="polite"></p>
     <section id="login-screen" hidden aria-labelledby="login-title">
@@ -32,9 +38,9 @@
     <section id="portal-screen" hidden aria-labelledby="portal-title">
       <h2 id="portal-title">Painel</h2>
       <button type="button" id="logout">Sair</button>
-      <section aria-labelledby="summary-title"><h3 id="summary-title">Resumo</h3><p id="summary"></p></section>
-      <section aria-labelledby="departments-title"><h3 id="departments-title">Departamentos</h3><ul id="departments"></ul></section>
-      <section aria-labelledby="interactions-title">
+      <section class="analytics-overview" aria-labelledby="summary-title"><h3 id="summary-title">Resumo</h3><p id="summary"></p></section>
+      <section class="analytics-departments" aria-labelledby="departments-title"><h3 id="departments-title">Departamentos</h3><ul id="departments"></ul></section>
+      <section class="analytics-interactions" aria-labelledby="interactions-title">
         <h3 id="interactions-title">Interações</h3>
         <form id="search-form">
           <label>Departamento <input id="department-code" maxlength="128"></label>
