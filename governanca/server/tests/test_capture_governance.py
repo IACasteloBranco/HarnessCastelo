@@ -4,7 +4,7 @@ import os
 import unittest
 from datetime import datetime, timezone
 from unittest.mock import patch
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 from cryptography.fernet import Fernet
@@ -153,6 +153,42 @@ class CaptureGovernanceTests(unittest.IsolatedAsyncioTestCase):
                 "SELECT employee_id FROM employees WHERE employee_id = ?", (code,),
             ).fetchone())
 
+    async def test_auditor_cannot_decide_machine_assignment(self):
+        async with session_factory()() as session, session.begin():
+            auditor = await session.scalar(select(Employee).where(Employee.code == self.denied))
+            auditor.role = "auditor"
+        installation_id = uuid4()
+        for decision in ("approve", "reject"):
+            response = await self.clients["denied"].post(
+                f"/api/capture/v1/admin/machines/{installation_id}/assignment-request/{decision}",
+                headers={"Origin": "https://app.test"},
+            )
+            self.assertEqual(response.status_code, 403, response.text)
+
+    async def test_investigation_without_subject_cannot_be_approved(self):
+        requested = await self.clients["viewer"].post(
+            "/api/governance/investigations", headers={"Origin": "https://app.test"},
+            json={"purpose": "Apurar uma suspeita sobre o uso da extensão",
+                  "viewers": [self.viewer], "employee_code": self.other_employee},
+        )
+        self.assertEqual(requested.status_code, 200)
+        async with session_factory()() as session, session.begin():
+            case = await session.get(GovernanceInvestigation, UUID(requested.json()["id"]))
+            case.target_employee_id = None
+        listed = await self.clients["approver"].get("/api/governance/investigations")
+        self.assertTrue(listed.json()["investigations"][0]["can_reject"])
+        self.assertFalse(listed.json()["investigations"][0]["can_approve"])
+        approved = await self.clients["approver"].post(
+            f"/api/governance/investigations/{requested.json()['id']}/decision/approve",
+            headers={"Origin": "https://app.test"},
+        )
+        self.assertEqual(approved.status_code, 409)
+        rejected = await self.clients["approver"].post(
+            f"/api/governance/investigations/{requested.json()['id']}/decision/reject",
+            headers={"Origin": "https://app.test"},
+        )
+        self.assertEqual(rejected.status_code, 200)
+
     async def asyncTearDown(self):
         for client in getattr(self, "clients", {}).values():
             await client.aclose()
@@ -249,19 +285,30 @@ class CaptureGovernanceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(list_audit)
         self.assertEqual((list_audit["event_type"], list_audit["record_count"]), ("content_read", 1))
 
+        missing_subject = await client.post("/api/governance/investigations", headers={"Origin": "https://app.test"},
+                                            json={"purpose": "Apurar uma suspeita sobre o uso da extensão",
+                                                  "viewers": [self.viewer]})
+        self.assertEqual(missing_subject.status_code, 422)
+        unknown_subject = await client.post("/api/governance/investigations", headers={"Origin": "https://app.test"},
+                                            json={"purpose": "Apurar uma suspeita sobre o uso da extensão",
+                                                  "viewers": [self.viewer], "employee_code": "unknown"})
+        self.assertEqual(unknown_subject.status_code, 400)
         requested = await client.post("/api/governance/investigations", headers={"Origin": "https://app.test"},
                                       json={"purpose": "Apurar uma suspeita sobre o uso da extensão",
-                                            "viewers": [self.viewer]})
+                                            "viewers": [self.viewer], "employee_code": self.viewer})
         self.assertEqual(requested.status_code, 200, requested.text)
         case_id = requested.json()["id"]
+        listed = await self.clients["approver"].get("/api/governance/investigations")
+        self.assertEqual(listed.status_code, 200)
+        self.assertEqual(listed.json()["investigations"][0]["target_employee_code"], self.viewer)
         approved = await self.clients["approver"].post(
             f"/api/governance/investigations/{case_id}/decision/approve",
             headers={"Origin": "https://app.test"})
         self.assertEqual(approved.status_code, 200, approved.text)
-        bound = await client.post(f"/api/governance/investigations/{case_id}/subject",
-                                  headers={"Origin": "https://app.test"},
-                                  json={"employee_code": self.viewer})
-        self.assertEqual(bound.status_code, 200, bound.text)
+        cannot_retarget = await client.post(f"/api/governance/investigations/{case_id}/subject",
+                                            headers={"Origin": "https://app.test"},
+                                            json={"employee_code": self.other_employee})
+        self.assertEqual(cannot_retarget.status_code, 405)
         detail = await client.get(f"/api/capture/v1/interactions/{self.interaction_ids[0]}",
                                   params={"investigation_id": case_id})
         self.assertEqual(detail.status_code, 200, detail.text)

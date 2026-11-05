@@ -123,14 +123,18 @@ class IndependentIdentityTests(unittest.IsolatedAsyncioTestCase):
             await auth.change_password(token, passwords[code], "changed-password-123")
             identities[code] = (await auth.resolve_session(token)).employee_id
         requested = await investigations.request_investigation(
-            identities["viewer"], "Investigation of individual capture", ["viewer" + suffix])
+            identities["viewer"], "Investigation of individual capture", ["viewer" + suffix], "subject" + suffix)
+        pending = await investigations.list_investigations(identities["approver"])
+        self.assertEqual(pending[0]["target_employee_code"], "subject" + suffix)
         with self.assertRaises(investigations.InvestigationDenied):
             await investigations.decide_investigation(identities["viewer"], requested["id"], True)
         await investigations.decide_investigation(identities["approver"], requested["id"], True)
-        await investigations.select_subject(identities["viewer"], requested["id"], "subject" + suffix)
         async with database.session_factory()() as session:
             subject = await session.scalar(select(Employee).where(Employee.code == "subject" + suffix))
+            other = await session.scalar(select(Employee).where(Employee.code == "other" + suffix))
         await investigations.require_investigation(identities["viewer"], requested["id"], subject.id)
+        with self.assertRaises(investigations.InvestigationDenied):
+            await investigations.require_investigation(identities["viewer"], requested["id"], other.id)
         with self.assertRaises(investigations.InvestigationDenied):
             await investigations.require_investigation(identities["other"], requested["id"], subject.id)
 
@@ -149,7 +153,7 @@ class IndependentIdentityTests(unittest.IsolatedAsyncioTestCase):
         employee = await auth.resolve_session(token)
         self.assertTrue(employee.must_change_password)
         with self.assertRaises(investigations.InvestigationDenied):
-            await investigations.request_investigation(employee.employee_id, "Specific investigative purpose", [requester])
+            await investigations.request_investigation(employee.employee_id, "Specific investigative purpose", [requester], requester)
         self.assertTrue(await auth.change_password(token, temporary, "replaced-password-123"))
         self.assertFalse((await auth.resolve_session(token)).must_change_password)
         self.assertIsNone(await auth.login(requester, temporary))

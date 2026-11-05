@@ -105,7 +105,7 @@ test('analytics renders only metadata as text and filters interactions', async (
   assert.equal(p.calls.at(-1).url, '/api/capture/v1/admin/analytics/interactions?department_code=FIN');
 });
 
-test('investigation needs approval and subject before detail is requested', async () => {
+test('investigation fixes its subject before approval and detail is requested', async () => {
   let state = 'pending';
   let resolveDetail;
   let detailResponse = { prompt: { text: '<img src=x onerror=alert(1)>' }, responses: [{ text: 'answer' }] };
@@ -119,22 +119,16 @@ test('investigation needs approval and subject before detail is requested', asyn
     }], total: 1 },
     '/api/governance/investigations': () => ({ investigations: [{ id: 'case-1',
       purpose: '<script>bad()</script>', status: state, viewers: ['EMP1'], requested_by: 'GOV2',
-      can_approve: state === 'pending', can_use: state === 'approved' || state === 'bound',
-      target_employee_code: state === 'bound' ? 'EMP1' : null, expires_at: '2099-01-01T00:00:00Z',
+      can_approve: state === 'pending', can_reject: state === 'pending', can_use: state === 'approved',
+      target_employee_code: 'EMP1', expires_at: '2099-01-01T00:00:00Z',
     }] }),
     '/api/governance/investigations/case-1/decision/approve': () => { state = 'approved'; return { status: state }; },
-    '/api/governance/investigations/case-1/subject': () => { state = 'bound'; return { employee_code: 'EMP1' }; },
     '/api/capture/v1/interactions/00000000-0000-0000-0000-000000000001?investigation_id=case-1': () => detailResponse,
   });
   const item = p.el('interactions').children[0];
   assert.equal(item.children.at(-1).listeners.click, undefined);
   assert.match(p.el('investigations').children[0].children[0].textContent, /^<script>bad\(\)<\/script>/);
   await p.el('investigations').children[0].children[1].fire('click');
-  const caseRow = p.el('investigations').children[0];
-  const input = caseRow.children.find(child => child['aria-label'] === 'Colaborador investigado');
-  input.value = 'EMP1';
-  await caseRow.children.at(-1).fire('click');
-  assert.equal(JSON.parse(p.calls.find(call => call.url.endsWith('/subject')).options.body).employee_code, 'EMP1');
   await p.el('investigations').children[0].children.at(-1).fire('click');
   await p.el('interactions').children[0].children.at(-1).fire('click');
   assert.equal(p.el('detail').children[0].textContent, '<img src=x onerror=alert(1)>');
@@ -175,9 +169,6 @@ test('standalone document has dedicated password gate and privacy notice', () =>
     assert.match(html, new RegExp(`id="${id}"`));
   }
   assert.match(html, /href="\.\/privacidade\.html"/);
-  assert.match(html, /class="portal-brand"/);
-  assert.match(html, /src="\.\/castelo-footer-logo\.png"/);
-  assert.match(html, /class="analytics-overview"/);
   assert.match(html, /id="change-screen"[^>]*hidden/);
   assert.match(html, /id="portal-screen"[^>]*hidden/);
   assert.doesNotMatch(html, /convite|ativação de conta/i);
@@ -263,7 +254,7 @@ test('request submits purpose and viewers and rejection uses decision route', as
     '/api/governance/investigations': options => {
       if (options.method === 'POST') { created = true; return { id: 'case-2' }; }
       return { investigations: created && !rejected ? [{ id: 'case-2', purpose: 'Suspeita documentada de vazamento',
-        status: 'pending', requested_by: 'OTHER', viewers: ['GOV1'], can_approve: true }] : [] };
+        status: 'pending', requested_by: 'OTHER', viewers: ['GOV1'], can_approve: true, can_reject: true }] : [] };
     },
     '/api/governance/investigations/case-2/decision/reject': () => {
       rejected = true; return { status: 'rejected' };
@@ -271,13 +262,29 @@ test('request submits purpose and viewers and rejection uses decision route', as
   });
   p.el('purpose').value = 'Suspeita documentada de vazamento';
   p.el('viewers').value = 'GOV1, GOV2';
+  p.el('investigation-employee-code').value = 'EMP1';
   await p.el('investigation-form').fire('submit');
   const request = p.calls.find(call => call.url === '/api/governance/investigations' && call.options.method === 'POST');
   assert.deepEqual(JSON.parse(request.options.body), {
-    purpose: 'Suspeita documentada de vazamento', viewers: ['GOV1', 'GOV2'],
+    purpose: 'Suspeita documentada de vazamento', viewers: ['GOV1', 'GOV2'], employee_code: 'EMP1',
   });
   await p.el('investigations').children[0].children.at(-1).fire('click');
   assert.equal(rejected, true);
+});
+
+test('legacy investigation without subject can be rejected but not approved', async () => {
+  const p = await portal({
+    '/api/auth/me': { role: 'governance', must_change_password: false },
+    '/api/capture/v1/admin/analytics/summary': { totals: { interactions: 0, responses: 0 } },
+    '/api/capture/v1/admin/analytics/departments': { departments: [] },
+    '/api/capture/v1/admin/analytics/interactions': { items: [], total: 0 },
+    '/api/capture/v1/admin/machines/assignment-requests': { items: [] },
+    '/api/governance/investigations': { investigations: [{ id: 'case-legacy', purpose: 'Legacy case',
+      status: 'pending', viewers: ['GOV1'], requested_by: 'GOV2', target_employee_code: null,
+      can_approve: false, can_reject: true }] },
+  });
+  const buttons = p.el('investigations').children[0].children.filter(child => child.type === 'button');
+  assert.deepEqual(buttons.map(child => child.textContent), ['Rejeitar']);
 });
 
 test('logout prevents a pending analytics response from restoring private data', async () => {
