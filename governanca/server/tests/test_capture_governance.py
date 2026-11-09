@@ -165,29 +165,24 @@ class CaptureGovernanceTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(response.status_code, 403, response.text)
 
-    async def test_investigation_without_subject_cannot_be_approved(self):
+    async def test_legacy_access_request_without_subject_cannot_grant_content_access(self):
         requested = await self.clients["viewer"].post(
             "/api/governance/investigations", headers={"Origin": "https://app.test"},
             json={"purpose": "Apurar uma suspeita sobre o uso da extensão",
-                  "viewers": [self.viewer], "employee_code": self.other_employee},
+                  "employee_code": self.other_employee},
         )
         self.assertEqual(requested.status_code, 200)
         async with session_factory()() as session, session.begin():
             case = await session.get(GovernanceInvestigation, UUID(requested.json()["id"]))
             case.target_employee_id = None
         listed = await self.clients["approver"].get("/api/governance/investigations")
-        self.assertTrue(listed.json()["investigations"][0]["can_reject"])
+        self.assertFalse(listed.json()["investigations"][0]["can_reject"])
         self.assertFalse(listed.json()["investigations"][0]["can_approve"])
-        approved = await self.clients["approver"].post(
+        decision = await self.clients["approver"].post(
             f"/api/governance/investigations/{requested.json()['id']}/decision/approve",
             headers={"Origin": "https://app.test"},
         )
-        self.assertEqual(approved.status_code, 409)
-        rejected = await self.clients["approver"].post(
-            f"/api/governance/investigations/{requested.json()['id']}/decision/reject",
-            headers={"Origin": "https://app.test"},
-        )
-        self.assertEqual(rejected.status_code, 200)
+        self.assertEqual(decision.status_code, 405)
 
     async def asyncTearDown(self):
         for client in getattr(self, "clients", {}).values():
@@ -286,25 +281,26 @@ class CaptureGovernanceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((list_audit["event_type"], list_audit["record_count"]), ("content_read", 1))
 
         missing_subject = await client.post("/api/governance/investigations", headers={"Origin": "https://app.test"},
-                                            json={"purpose": "Apurar uma suspeita sobre o uso da extensão",
-                                                  "viewers": [self.viewer]})
+                                            json={"purpose": "Apurar uma suspeita sobre o uso da extensão"})
         self.assertEqual(missing_subject.status_code, 422)
         unknown_subject = await client.post("/api/governance/investigations", headers={"Origin": "https://app.test"},
                                             json={"purpose": "Apurar uma suspeita sobre o uso da extensão",
-                                                  "viewers": [self.viewer], "employee_code": "unknown"})
+                                                  "employee_code": "unknown"})
         self.assertEqual(unknown_subject.status_code, 400)
         requested = await client.post("/api/governance/investigations", headers={"Origin": "https://app.test"},
                                       json={"purpose": "Apurar uma suspeita sobre o uso da extensão",
-                                            "viewers": [self.viewer], "employee_code": self.viewer})
+                                            "employee_code": self.viewer})
         self.assertEqual(requested.status_code, 200, requested.text)
         case_id = requested.json()["id"]
-        listed = await self.clients["approver"].get("/api/governance/investigations")
+        listed = await client.get("/api/governance/investigations")
         self.assertEqual(listed.status_code, 200)
         self.assertEqual(listed.json()["investigations"][0]["target_employee_code"], self.viewer)
-        approved = await self.clients["approver"].post(
-            f"/api/governance/investigations/{case_id}/decision/approve",
-            headers={"Origin": "https://app.test"})
-        self.assertEqual(approved.status_code, 200, approved.text)
+        self.assertTrue(listed.json()["investigations"][0]["can_use"])
+        self.assertFalse(listed.json()["investigations"][0]["can_approve"])
+        self.assertFalse(listed.json()["investigations"][0]["can_reject"])
+        not_requester = await self.clients["approver"].get(
+            f"/api/capture/v1/interactions/{self.interaction_ids[0]}", params={"investigation_id": case_id})
+        self.assertEqual(not_requester.status_code, 403)
         cannot_retarget = await client.post(f"/api/governance/investigations/{case_id}/subject",
                                             headers={"Origin": "https://app.test"},
                                             json={"employee_code": self.other_employee})
@@ -322,7 +318,7 @@ class CaptureGovernanceTests(unittest.IsolatedAsyncioTestCase):
             audit = db.execute(
                 """SELECT event_type, action, record_count FROM privacy_audit
                    WHERE actor_id = ? AND action = ? ORDER BY audit_id DESC LIMIT 1""",
-                (self.viewer, f"GET /v1/interactions/{{interaction_id}} investigation={case_id}"),
+                (self.viewer, f"GET /v1/interactions/{self.interaction_ids[0]} investigation={case_id}"),
             ).fetchone()
         self.assertIsNotNone(audit)
         self.assertEqual((audit["event_type"], audit["record_count"]), ("content_read", 1))

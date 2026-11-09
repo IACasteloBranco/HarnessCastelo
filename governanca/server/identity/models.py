@@ -58,6 +58,7 @@ class Employee(Base):
     organization_id: Mapped[UUID] = mapped_column(ForeignKey("organizations.id"), nullable=False)
     department_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     code: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     role: Mapped[str] = mapped_column(String(20), nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     must_change_password: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
