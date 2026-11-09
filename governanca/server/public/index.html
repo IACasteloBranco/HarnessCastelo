@@ -53,16 +53,15 @@
         <p id="interaction-count"></p><ul id="interactions"></ul>
       </section>
       <section aria-labelledby="investigations-title">
-        <h3 id="investigations-title">Investigações</h3>
-        <p>O acesso ao conteúdo requer aprovação por outra pessoa da governança e vínculo de colaborador.</p>
+        <h3 id="investigations-title">Acesso a interações</h3>
+        <p>Informe a finalidade e o colaborador. O acesso ao conteúdo é liberado por uma hora e registrado para auditoria.</p>
         <form id="investigation-form">
           <label>Finalidade (mínimo 20 caracteres) <textarea id="purpose" required minlength="20" maxlength="2000"></textarea></label>
-          <label>Código do colaborador investigado <input id="investigation-employee-code" required maxlength="128"></label>
-          <label>Códigos dos responsáveis pelo acesso, separados por vírgula <input id="viewers" required></label>
-          <button>Solicitar investigação</button>
+          <label>Código do colaborador <input id="investigation-employee-code" required maxlength="128"></label>
+          <button>Registrar solicitação e acessar</button>
         </form>
         <p id="active-case"></p><ul id="investigations"></ul>
-        <h4>Conteúdo da interação autorizada</h4><div id="detail"></div>
+        <h4>Conteúdo da interação</h4><div id="detail"></div>
       </section>
       <section aria-labelledby="machines-title"><h3 id="machines-title">Aprovações de máquinas</h3><ul id="machines"></ul></section>
     </section>
