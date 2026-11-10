@@ -1,8 +1,10 @@
 "use strict";
 const $ = id => document.getElementById(id);
+const requestedTv = location.pathname === '/tv';
 const show = screen => {
-  for (const id of ['login', 'change', 'portal']) $(`${id}-screen`).hidden = id !== screen;
-  const path = screen === 'change' ? '/change-password' : '/';
+  for (const id of ['login', 'change', 'portal', 'tv']) $(`${id}-screen`).hidden = id !== screen;
+  document.body.classList.toggle('tv-mode', screen === 'tv');
+  const path = screen === 'change' ? '/change-password' : screen === 'tv' ? '/tv' : '/';
   if (location.pathname !== path) history.replaceState(null, '', path);
 };
 async function api(url, options = {}) {
@@ -19,6 +21,8 @@ let activeCase = null;
 let detailVersion = 0;
 let interactionVersion = 0;
 let analyticsVersion = 0;
+let tvRefreshTimer = null;
+let tvHasData = false;
 function clearDetail() { detailVersion++; $('detail').replaceChildren(); }
 function rows(id, items, fields) {
   const target = $(id);
@@ -164,6 +168,85 @@ async function analytics() {
     await interactions();
   } catch (error) { errorMessage(error); }
 }
+function todayParams() {
+  const timeZone = 'America/Sao_Paulo';
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  });
+  const parts = date => Object.fromEntries(formatter.formatToParts(date).map(part => [part.type, part.value]));
+  const current = parts(new Date());
+  const today = Date.UTC(Number(current.year), Number(current.month) - 1, Number(current.day));
+  const startOfSaoPauloDay = target => {
+    let timestamp = target;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const local = parts(new Date(timestamp));
+      const representedAsUtc = Date.UTC(Number(local.year), Number(local.month) - 1, Number(local.day),
+        Number(local.hour), Number(local.minute), Number(local.second));
+      timestamp += target - representedAsUtc;
+    }
+    return new Date(timestamp).toISOString();
+  };
+  const tomorrow = new Date(today);
+  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+  return new URLSearchParams({ from: startOfSaoPauloDay(today), to: startOfSaoPauloDay(tomorrow.getTime()) });
+}
+function appendTvBars(target, items, labelKey, valueKey) {
+  target.replaceChildren();
+  const max = Math.max(1, ...items.map(item => Number(item[valueKey]) || 0));
+  for (const item of items) {
+    const row = document.createElement('div');
+    row.className = 'tv-bar-row';
+    const label = document.createElement('span');
+    label.className = 'tv-bar-label';
+    label.textContent = String(item[labelKey] || 'Não identificado');
+    const track = document.createElement('div');
+    track.className = 'tv-bar-track';
+    const fill = document.createElement('div');
+    fill.className = 'tv-bar-fill';
+    fill.style.width = `${Math.max(0, (Number(item[valueKey]) || 0) / max * 100)}%`;
+    track.append(fill);
+    const value = document.createElement('strong');
+    value.textContent = new Intl.NumberFormat('pt-BR').format(Number(item[valueKey]) || 0);
+    row.append(label, track, value);
+    target.append(row);
+  }
+}
+async function tvDashboard() {
+  const params = todayParams().toString();
+  const query = `?${params}`;
+  try {
+    const summary = await api(`/api/capture/v1/admin/analytics/tv${query}`);
+    const totals = summary.totals;
+    const departments = (summary.by_department || []).filter(item => item.interactions > 0);
+    const platformRows = (summary.by_platform || []).map(item => ({
+      label: item.platform === 'chatgpt_web' ? 'ChatGPT Web' : item.platform === 'claude_web' ? 'Claude Web' : 'Outra plataforma',
+      interactions: item.interactions,
+    }));
+
+    $('tv-interactions').textContent = new Intl.NumberFormat('pt-BR').format(totals.interactions);
+    $('tv-employees').textContent = new Intl.NumberFormat('pt-BR').format(totals.employees);
+    $('tv-departments-count').textContent = new Intl.NumberFormat('pt-BR').format(totals.departments);
+    $('tv-incomplete').textContent = new Intl.NumberFormat('pt-BR').format(totals.incomplete_responses);
+    appendTvBars($('tv-departments'), departments.slice(0, 8), 'department_name', 'interactions');
+    appendTvBars($('tv-platforms'), platformRows, 'label', 'interactions');
+    $('tv-empty').hidden = totals.interactions > 0;
+    $('tv-last-event').textContent = totals.last_activity_at
+      ? `Último evento: ${new Intl.DateTimeFormat('pt-BR', {
+        timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit',
+      }).format(new Date(totals.last_activity_at))}`
+      : 'Nenhum evento recebido hoje';
+    $('tv-last-updated').textContent = `Consulta às ${new Intl.DateTimeFormat('pt-BR', {
+      timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit', second: '2-digit',
+    }).format(new Date())} · horário de Brasília`;
+    $('tv-error').textContent = '';
+    tvHasData = true;
+  } catch (error) {
+    $('tv-error').textContent = tvHasData
+      ? 'Não foi possível atualizar. Os indicadores exibidos são da última consulta.'
+      : 'Não foi possível carregar os dados da extensão. Confira a conexão e tente novamente.';
+  }
+}
 async function interactions() {
   const version = ++interactionVersion;
   try {
@@ -183,10 +266,17 @@ async function session() {
     const me = await api('/api/auth/me');
     if (me.must_change_password) show('change');
     else if (me.role === 'governance') {
-      show('portal');
-      await analytics();
-      await investigations();
-      await machines();
+      if (requestedTv || location.pathname === '/tv') {
+        show('tv');
+        await tvDashboard();
+        clearInterval(tvRefreshTimer);
+        tvRefreshTimer = setInterval(() => { if (!document.hidden && location.pathname === '/tv') void tvDashboard(); }, 60_000);
+      } else {
+        show('portal');
+        await analytics();
+        await investigations();
+        await machines();
+      }
     }
     else { show('login'); $('message').textContent = 'Acesso reservado à governança.'; }
   } catch (error) {
@@ -246,5 +336,11 @@ $('logout').addEventListener('click', async () => {
     for (const id of ['departments', 'interactions', 'investigations', 'machines']) $(id).replaceChildren();
     show('login');
   } catch (error) { errorMessage(error); }
+});
+$('tv-fullscreen').addEventListener('click', async () => {
+  try {
+    if (document.fullscreenElement) await document.exitFullscreen();
+    else await document.documentElement.requestFullscreen();
+  } catch { $('tv-error').textContent = 'O navegador não permitiu ativar a tela cheia.'; }
 });
 void session();

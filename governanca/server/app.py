@@ -93,6 +93,11 @@ _portal = Path(__file__).resolve().parent / "public"
 async def change_password_page():
     return FileResponse(_portal / "index.html")
 
+
+@app.get("/tv")
+async def tv_dashboard_page():
+    return FileResponse(_portal / "index.html")
+
 app.mount("/", StaticFiles(directory=_portal, html=True), name="governance-portal")
 
 

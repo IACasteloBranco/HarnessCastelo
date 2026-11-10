@@ -174,6 +174,67 @@ def department_analytics(
     }
 
 
+@router.get("/tv")
+def tv_analytics(
+    response: Response,
+    start: datetime | None = Query(default=None, alias="from"),
+    end: datetime | None = Query(default=None, alias="to"),
+    scope: dict = Depends(require_governance_analytics),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    start, end = _normalize_period(start, end)
+    where, values = _interaction_filter(scope["organization_code"], None, start, end)
+    with connect(settings) as db:
+        totals = db.execute(
+            f"""SELECT COUNT(DISTINCT i.interaction_id) AS interactions,
+                       COUNT(DISTINCT i.employee_id) AS employees,
+                       COUNT(DISTINCT i.department_code) AS departments,
+                       COUNT(DISTINCT r.response_id) AS responses,
+                       COUNT(DISTINCT CASE WHEN r.capture_status = 'complete' THEN r.response_id END) AS complete_responses,
+                       COUNT(DISTINCT CASE WHEN r.capture_status = 'incomplete' THEN r.response_id END) AS incomplete_responses,
+                       MAX(COALESCE(r.received_at, i.received_at)) AS last_activity_at
+                FROM interactions i
+                LEFT JOIN responses r ON r.interaction_id = i.interaction_id
+                WHERE {where}""",
+            values,
+        ).fetchone()
+        rows = db.execute(
+            f"""SELECT COALESCE(i.department_code, 'unknown') AS department_code,
+                       MAX(COALESCE(d.department_name, i.department_code, 'Não atribuído')) AS department_name,
+                       i.platform,
+                       COUNT(DISTINCT i.interaction_id) AS interactions
+                FROM interactions i
+                LEFT JOIN employees e ON e.employee_id = i.employee_id
+                LEFT JOIN departments d ON d.department_code = i.department_code
+                    AND d.organization_id = e.organization_id
+                WHERE {where}
+                GROUP BY COALESCE(i.department_code, 'unknown'), i.platform
+                ORDER BY interactions DESC, department_name""",
+            values,
+        ).fetchall()
+
+    departments: dict[str, dict] = {}
+    platforms: dict[str, int] = defaultdict(int)
+    for row in rows:
+        item = dict(row)
+        department = departments.setdefault(item["department_code"], {
+            "department_code": item["department_code"],
+            "department_name": item["department_name"],
+            "interactions": 0,
+        })
+        department["interactions"] += item["interactions"]
+        platforms[item["platform"] or "unknown"] += item["interactions"]
+
+    return {
+        "period": {"from": iso(start) if start else None, "to": iso(end) if end else None},
+        "totals": dict(totals),
+        "by_department": sorted(departments.values(), key=lambda item: (-item["interactions"], item["department_name"])),
+        "by_platform": [{"platform": platform, "interactions": count}
+                        for platform, count in sorted(platforms.items(), key=lambda item: -item[1])],
+    }
+
+
 @router.get("/interactions")
 def search_interactions(
     response: Response,

@@ -36,8 +36,11 @@
       </form>
     </section>
     <section id="portal-screen" hidden aria-labelledby="portal-title">
-      <h2 id="portal-title">Painel</h2>
-      <button type="button" id="logout">Sair</button>
+      <div class="portal-actions">
+        <h2 id="portal-title">Painel</h2>
+        <a class="tv-link" href="/tv">Abrir modo TV</a>
+        <button type="button" id="logout">Sair</button>
+      </div>
       <section class="analytics-overview" aria-labelledby="summary-title"><h3 id="summary-title">Resumo</h3><p id="summary"></p></section>
       <section class="analytics-departments" aria-labelledby="departments-title"><h3 id="departments-title">Departamentos</h3><ul id="departments"></ul></section>
       <section class="analytics-interactions" aria-labelledby="interactions-title">
@@ -64,6 +67,44 @@
         <h4>Conteúdo da interação</h4><div id="detail"></div>
       </section>
       <section aria-labelledby="machines-title"><h3 id="machines-title">Aprovações de máquinas</h3><ul id="machines"></ul></section>
+    </section>
+    <section id="tv-screen" hidden aria-labelledby="tv-title">
+      <div class="tv-shell">
+        <header class="tv-header">
+          <div class="tv-brand">
+            <img src="./castelo-footer-logo.png" alt="Castelo Branco">
+            <div><p>GOVERNANÇA DE IA</p><h2 id="tv-title">Central de Comando</h2></div>
+          </div>
+          <div class="tv-header-actions">
+            <span class="tv-scope">Somente dados da extensão</span>
+            <button id="tv-fullscreen" type="button">Tela cheia</button>
+          </div>
+        </header>
+        <div class="tv-meta">
+          <span>ChatGPT Web e Claude Web observados pela extensão</span>
+          <span><span id="tv-last-event">Último evento: aguardando dados</span> · <span id="tv-last-updated">Atualizando painel...</span></span>
+        </div>
+        <p id="tv-error" role="status" aria-live="polite"></p>
+        <div id="tv-empty" hidden>Sem interações registradas pela extensão hoje.</div>
+        <div class="tv-metrics" aria-label="Indicadores de hoje">
+          <article><span>Interações capturadas hoje</span><strong id="tv-interactions">—</strong></article>
+          <article><span>Colaboradores identificados</span><strong id="tv-employees">—</strong></article>
+          <article><span>Departamentos com registros</span><strong id="tv-departments-count">—</strong></article>
+          <article><span>Respostas incompletas</span><strong id="tv-incomplete">—</strong></article>
+        </div>
+        <div class="tv-panels">
+          <article class="tv-panel">
+            <div class="tv-panel-heading"><div><h3>Atividade por departamento</h3><p>Interações recebidas hoje</p></div></div>
+            <div id="tv-departments" class="tv-bars" aria-live="polite"></div>
+          </article>
+          <article class="tv-panel">
+            <div class="tv-panel-heading"><div><h3>Interações por plataforma</h3><p>Origem informada pela extensão</p></div></div>
+            <div id="tv-platforms" class="tv-platforms" aria-live="polite"></div>
+            <p class="tv-coverage-note">O painel cobre somente as abas suportadas e as instalações vinculadas à Governança.</p>
+          </article>
+        </div>
+        <footer class="tv-footer">A extensão não representa o uso de ferramentas ou dispositivos que ela não observa.</footer>
+      </div>
     </section>
   </main>
 </body>
