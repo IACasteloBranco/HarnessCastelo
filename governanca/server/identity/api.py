@@ -12,6 +12,7 @@ router = APIRouter(prefix="/api/auth", tags=["internal-auth"])
 COOKIE_NAME = "governanca_session"
 COOKIE_PATH = "/api"
 EXTENSION_ORIGIN = "chrome-extension://njcbfaglhfigplenmpaojjgdbcjcfbjh"
+EXTENSION_ORIGINS = {EXTENSION_ORIGIN, "chrome-extension://cnbpiejbofngbdncgppaniclkjeigboa"}
 
 
 class LoginBody(BaseModel):
@@ -63,7 +64,7 @@ async def login_route(body: LoginBody, request: Request, response: Response):
 @router.post("/extension/login")
 async def extension_login_route(body: LoginBody, request: Request, response: Response):
     response.headers["Cache-Control"] = "no-store"
-    if request.headers.get("Origin") != EXTENSION_ORIGIN:
+    if request.headers.get("Origin") not in EXTENSION_ORIGINS:
         raise HTTPException(403, "invalid extension origin")
     result = await login(body.employee_code, body.password, extension=True)
     if result is None:
@@ -100,7 +101,7 @@ async def extension_me_route(response: Response, employee: EmployeeInfo = Depend
 @router.post("/extension/renew")
 async def extension_renew_route(request: Request, response: Response):
     response.headers["Cache-Control"] = "no-store"
-    if request.headers.get("Origin") != EXTENSION_ORIGIN:
+    if request.headers.get("Origin") not in EXTENSION_ORIGINS:
         raise HTTPException(403, "invalid extension origin")
     scheme, _, token = request.headers.get("Authorization", "").partition(" ")
     expires_at = await renew_extension_session(token.strip()) if scheme.lower() == "bearer" else None

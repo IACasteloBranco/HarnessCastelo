@@ -35,6 +35,20 @@ class GovernanceAppTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inspection.json()["action"], "allow")
         self.assertEqual(codex_proxy.status_code, 404)
 
+    async def test_store_extension_origin_can_log_in_and_inspect(self):
+        origin = "chrome-extension://cnbpiejbofngbdncgppaniclkjeigboa"
+        with patch("governanca.server.identity.api.login", new_callable=AsyncMock, return_value=None) as login:
+            login_response = await self.client.post("/api/auth/extension/login", headers={"Origin": origin},
+                                                    json={"employee_code": "test", "password": "test"})
+        inspection = await self.client.post("/api/auth/extension/inspect", headers={"Origin": origin},
+                                            json={"text": "texto sintético"})
+        renewal = await self.client.post("/api/auth/extension/renew", headers={"Origin": origin})
+        self.assertEqual(login_response.status_code, 401)
+        self.assertEqual(login_response.headers["Access-Control-Allow-Origin"], origin)
+        self.assertEqual(inspection.status_code, 200)
+        self.assertEqual(renewal.status_code, 401)
+        login.assert_awaited_once()
+
     async def test_portal_and_password_change_page_are_served_by_governance(self):
         for path in ("/", "/change-password"):
             response = await self.client.get(path)

@@ -15,7 +15,7 @@ from governanca.server.capture_app.integration import (
     clean_capture_store,
     initialize_capture_store,
 )
-from governanca.server.auth_api import EXTENSION_ORIGIN, router as auth_router
+from governanca.server.auth_api import EXTENSION_ORIGINS, router as auth_router
 from governanca.server.investigations_api import router as investigations_router
 from governanca.server.inspection import protect_stored_text
 
@@ -67,7 +67,7 @@ app.include_router(investigations_router)
 app.mount("/api/capture", capture_app(protect_content=protect_stored_text), name="governance-capture")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[EXTENSION_ORIGIN],
+    allow_origins=list(EXTENSION_ORIGINS),
     allow_credentials=False,
     allow_methods=["GET", "POST"],
     allow_headers=["Authorization", "Content-Type", "X-Machine-Id", "X-Machine-Timestamp",

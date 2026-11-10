@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 from governanca.server.identity.api import (
     EXTENSION_ORIGIN,
+    EXTENSION_ORIGINS,
     EmployeeInfo,
     extension_employee,
     router as identity_router,
@@ -31,7 +32,7 @@ async def extension_inspect_route(
     employee: EmployeeInfo = Depends(extension_employee),
 ):
     response.headers["Cache-Control"] = "no-store"
-    if request.headers.get("Origin") != EXTENSION_ORIGIN:
+    if request.headers.get("Origin") not in EXTENSION_ORIGINS:
         raise HTTPException(403, "invalid extension origin")
     try:
         decision = await inspect_text(body.text)
