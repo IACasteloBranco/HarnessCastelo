@@ -13,6 +13,7 @@ CAPTURE_PATHS = {
     "/v1/admin/analytics/departments",
     "/v1/admin/analytics/summary",
     "/v1/admin/analytics/interactions",
+    "/v1/admin/analytics/tv",
     "/v1/admin/machines/assignment-requests",
     "/v1/admin/machines/{installation_id}/assignment-request/approve",
     "/v1/admin/machines/{installation_id}/assignment-request/reject",
