@@ -1,0 +1,20 @@
+[Unit]
+Description=Governanca PostgreSQL backup to Cloud Storage
+Requires=postgresql@17-main.service
+After=postgresql@17-main.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=postgres
+Group=postgres
+EnvironmentFile=/etc/governanca-backup.env
+StateDirectory=governanca-backup
+StateDirectoryMode=0700
+LogDirectory=governanca-backup
+StandardOutput=append:/var/log/governanca-backup/backup.log
+StandardError=append:/var/log/governanca-backup/backup.log
+ExecStart=/usr/bin/python3 /usr/local/libexec/governanca-backup.py
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/governanca-backup

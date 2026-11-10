@@ -1,0 +1,20 @@
+{
+  "displayName": "Governança: falha ou atraso do backup PostgreSQL",
+  "documentation": {
+    "content": "Confira governanca-backup.service, governanca-backup-check.service e o último objeto no bucket de backup.",
+    "mimeType": "text/markdown"
+  },
+  "conditions": [
+    {
+      "displayName": "BACKUP_FAILED",
+      "conditionMatchedLog": {
+        "filter": "resource.type=\"gce_instance\" AND log_id(\"governanca_backup\") AND jsonPayload.message:\"BACKUP_FAILED\""
+      }
+    }
+  ],
+  "combiner": "OR",
+  "alertStrategy": {
+    "notificationRateLimit": {"period": "3600s"},
+    "autoClose": "604800s"
+  }
+}
