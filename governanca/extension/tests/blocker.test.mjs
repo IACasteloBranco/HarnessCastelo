@@ -202,8 +202,8 @@ test('clique e Enter enviam a prévia mascarada somente após confirmação', as
   const window = bridgeWindow(listeners, 'https://chatgpt.com', attributes);
   let captures = 0;
   const chrome = {runtime: {connect: () => port, sendMessage: message => message.type === 'inspect_sensitive_text'
-    ? Promise.resolve({action: 'mask', text: 'CPF [CPF_1]', requires_confirmation: true,
-      categories: ['CPF'], policy_version: 'governanca-1'}) : Promise.resolve({})}};
+    ? Promise.resolve({ok: true, data: {action: 'mask', text: 'CPF [CPF_1]', requires_confirmation: true,
+      categories: ['CPF'], policy_version: 'governanca-1'}}) : Promise.resolve({})}};
   const platform = {fileRoot: () => form, composer: () => form, sendButton: node => node === button};
   runInNewContext(`${policySource}\n${messagesSource}\n${bridgeSource}`, {window, document, chrome,
     location: {origin: 'https://chatgpt.com', href: 'https://chatgpt.com/c/synthetic'}, URL, Date, InputEvent: class {},

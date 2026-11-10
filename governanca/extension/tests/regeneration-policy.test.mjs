@@ -45,7 +45,7 @@ test('re-evaluates policy and resumes the menu click only after restoring the in
   const chrome = {runtime: {connect: () => port, sendMessage: async message => {
     decisions.push(message);
     return message.type === 'inspect_sensitive_text'
-      ? {action: 'allow', requires_confirmation: false, categories: [], policy_version: 'governanca-1'} : undefined;
+      ? {ok: true, data: {action: 'allow', requires_confirmation: false, categories: [], policy_version: 'governanca-1'}} : undefined;
   }}};
   const context = {window, document, chrome, location: {origin: 'https://chatgpt.com'}, URL,
     Date, setTimeout: () => {}, globalThis: {GovernancaCaptureRegeneration: (text, key) => {

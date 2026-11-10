@@ -202,7 +202,8 @@
       if (inspectionPending) return;
       inspectionPending = true;
       chrome.runtime.sendMessage({type: 'inspect_sensitive_text', text: textOverride ?? editorText(editor())})
-        .then(async result => {
+        .then(async response => {
+          const result = response?.ok ? response.data : null;
           if (result?.action === 'block') {
             showNotice('Envio bloqueado pela política de proteção de dados.', true);
             return;
