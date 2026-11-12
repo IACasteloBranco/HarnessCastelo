@@ -2,6 +2,31 @@
 
 Esta configuração protege o banco `governanca_staging` do PostgreSQL 17 da VM `governanca-castelobranco`. O timer cria um `pg_dump` consistente às terças e sextas, às 02h em `America/Bahia`. O primeiro backup bem-sucedido de cada mês é mensal; o primeiro de cada semana ISO é semanal; os demais são recentes. Assim, uma falha ou pausa da VM não elimina a cópia mensal seguinte.
 
+## Estado em 12 de novembro de 2026
+
+| Item | Estado |
+| --- | --- |
+| Código, timers, política de alertas e instruções | Criados e enviados para a branch `codex/governanca-backup` no commit `9ef0967`; ainda não integrados à `main`. |
+| Bucket `cb-governanca-backups-psyched-edge-511720-s5` | Criado no projeto `psyched-edge-511720-s5`, região `southamerica-east1`. |
+| Conta `governanca-vm@psyched-edge-511720-s5.iam.gserviceaccount.com` | Criada. Recebeu `roles/dlp.user`, `roles/logging.logWriter`, `roles/monitoring.metricWriter` no projeto e `roles/storage.objectCreator` apenas no bucket. |
+| Conta anexada à VM | Pendente. A VM ainda usa a conta Compute com `roles/editor`; a troca exige parar e iniciar a VM. |
+| Script e timers instalados na VM | Pendente. Nenhum backup automático está ativo. |
+| Coleta de logs e alerta por e-mail | Pendente. A configuração do Ops Agent e o alerta ainda não foram aplicados. |
+| Primeiro backup e restauração isolada | Pendente. Ainda não há prova operacional de recuperação. |
+
+O bucket e os papéis da nova conta foram criados manualmente. Não repita os comandos de criação da seção seguinte; use-os como referência para conferir as definições. A VM fez `git fetch` desta branch para obter `lifecycle.json`, mas o código não foi integrado à `main` nem instalado no sistema.
+
+### Próxima sequência
+
+1. Revise e integre `codex/governanca-backup` à `main` pelo GitHub. Atualize a VM com `git pull --ff-only origin main`.
+2. Na janela de manutenção, pare a VM e anexe `governanca-vm@psyched-edge-511720-s5.iam.gserviceaccount.com`, conforme os comandos abaixo. Inicie a VM e confirme que a extensão ainda consegue inspecionar texto pelo SDP e que o Ops Agent está ativo.
+3. Instale o script e os arquivos systemd pela seção [Instalar na VM](#2-instalar-na-vm). Execute um backup manual antes de habilitar os timers.
+4. Acrescente a configuração do Ops Agent sem apagar as configurações existentes e crie o alerta de e-mail pela seção [Logs, alertas e restauração](#3-logs-alertas-e-restauração).
+5. Confirme que chegou um objeto ao bucket, que os timers estão ativos e que o alerta encontra `BACKUP_FAILED`.
+6. Restaure uma cópia mensal em PostgreSQL 17 isolado e registre o resultado. Só então considere a recuperação validada.
+
+O trabalho ainda não está concluído. O passo que causa indisponibilidade é parar a VM para trocar sua conta de serviço; faça isso numa janela de manutenção. A implantação, os primeiros logs, o primeiro backup e a restauração dependem de comandos executados na GCP e ainda precisam de evidência.
+
 | Cópia | Classe no upload | Exclusão por ciclo de vida |
 | --- | --- | --- |
 | Recente | Standard | 30 dias |
