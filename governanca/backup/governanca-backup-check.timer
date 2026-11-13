@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily check for missing Governanca backups
+
+[Timer]
+OnCalendar=*-*-* 03:00:00 America/Bahia
+Persistent=true
+AccuracySec=1min
+Unit=governanca-backup-check.service
+
+[Install]
+WantedBy=timers.target

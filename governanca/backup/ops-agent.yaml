@@ -1,0 +1,10 @@
+logging:
+  receivers:
+    governanca_backup:
+      type: files
+      include_paths:
+        - /var/log/governanca-backup/backup.log
+  service:
+    pipelines:
+      governanca_backup:
+        receivers: [governanca_backup]

@@ -1,0 +1,16 @@
+[Unit]
+Description=Check Governanca backup freshness
+
+[Service]
+Type=oneshot
+User=postgres
+Group=postgres
+StateDirectory=governanca-backup
+StateDirectoryMode=0700
+LogDirectory=governanca-backup
+StandardOutput=append:/var/log/governanca-backup/backup.log
+StandardError=append:/var/log/governanca-backup/backup.log
+ExecStart=/usr/bin/python3 /usr/local/libexec/governanca-backup.py check
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/governanca-backup

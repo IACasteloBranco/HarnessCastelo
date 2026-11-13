@@ -1,0 +1,11 @@
+[Unit]
+Description=Governanca PostgreSQL backup on Tuesday and Friday
+
+[Timer]
+OnCalendar=Tue,Fri *-*-* 02:00:00 America/Bahia
+Persistent=true
+AccuracySec=1min
+Unit=governanca-backup.service
+
+[Install]
+WantedBy=timers.target

@@ -2,6 +2,8 @@
 
 Este é o projeto de extensão, captura protegida e analytics da Governança neste monorepo.
 
+O plano e o estado de implantação do backup do PostgreSQL da Governança estão em [governanca/backup/README.md](backup/README.md).
+
 - `extension/`: extensão Chrome atual para ChatGPT e Claude.
 - `server/`: API e painel próprios, com autenticação, captura, analytics, inspeção e integração com Google Sensitive Data Protection. Não executa nem importa o Maximus.
 
