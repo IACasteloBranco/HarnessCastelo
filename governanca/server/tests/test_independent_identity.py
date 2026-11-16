@@ -102,6 +102,44 @@ class IndependentIdentityTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("HttpOnly", success.headers["set-cookie"])
             self.assertNotIn(secret, success.text)
 
+    async def test_governance_can_create_collaborator_with_temporary_password(self):
+        from governanca.server.identity import api, auth
+        from governanca.server.identity.database import _session_factory
+
+        os.environ["GOVERNANCA_DATABASE_URL"] = os.environ["HARNESS_TEST_DATABASE_URL"]
+        command.upgrade(Config(str(Path(__file__).resolve().parents[2] / "alembic.ini")), "head")
+        _session_factory.cache_clear()
+        suffix = uuid4().hex
+        organization = "org-" + suffix
+        department = "dept-" + suffix
+        governance_code = "governance-" + suffix
+        await auth.provision_organization(organization, "Test organization")
+        await auth.provision_department(organization, department, "Test department")
+        temporary = await auth.provision_employee(organization, governance_code, "governance")
+        app = FastAPI()
+        app.include_router(api.router)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="https://governanca.test") as client:
+            headers = {"Origin": "https://governanca.test"}
+            login = await client.post("/api/auth/login", headers=headers,
+                                      json={"employee_code": governance_code, "password": temporary})
+            self.assertTrue(login.json()["must_change_password"])
+            changed = await client.post("/api/auth/change-password", headers=headers, json={
+                "current_password": temporary, "new_password": "changed-governance-password-123"})
+            self.assertEqual(changed.status_code, 200)
+            departments = await client.get("/api/auth/governance/departments")
+            self.assertEqual(departments.json()["departments"], [{"code": department, "name": "Test department"}])
+            created = await client.post("/api/auth/governance/accounts", headers=headers, json={
+                "employee_code": "collaborator-" + suffix,
+                "display_name": "Pessoa de teste",
+                "department_code": department,
+            })
+            self.assertEqual(created.status_code, 201, created.text)
+            self.assertEqual(created.headers["cache-control"], "no-store")
+            self.assertTrue(created.json()["must_change_password"])
+            password = created.json()["temporary_password"]
+            self.assertGreater(len(password), 20)
+            self.assertTrue((await auth.login("collaborator-" + suffix, password))[1])
+
     async def test_access_request_is_immediately_granted_and_scoped_to_requester(self):
         from governanca.server.identity import auth, database, investigations
         from governanca.server.identity.models import Employee
@@ -122,8 +160,7 @@ class IndependentIdentityTests(unittest.IsolatedAsyncioTestCase):
             token, _ = await auth.login(code + suffix, passwords[code])
             await auth.change_password(token, passwords[code], "changed-password-123")
             identities[code] = (await auth.resolve_session(token)).employee_id
-        requested = await investigations.request_investigation(
-            identities["viewer"], "Investigation of individual capture", "subject" + suffix)
+        requested = await investigations.request_investigation(identities["viewer"], "subject" + suffix)
         listed = await investigations.list_investigations(identities["viewer"])
         self.assertEqual(listed[0]["target_employee_code"], "subject" + suffix)
         self.assertTrue(listed[0]["can_use"])
@@ -153,7 +190,7 @@ class IndependentIdentityTests(unittest.IsolatedAsyncioTestCase):
         employee = await auth.resolve_session(token)
         self.assertTrue(employee.must_change_password)
         with self.assertRaises(investigations.InvestigationDenied):
-            await investigations.request_investigation(employee.employee_id, "Specific investigative purpose", requester)
+            await investigations.request_investigation(employee.employee_id, requester)
         self.assertTrue(await auth.change_password(token, temporary, "replaced-password-123"))
         self.assertFalse((await auth.resolve_session(token)).must_change_password)
         self.assertIsNone(await auth.login(requester, temporary))

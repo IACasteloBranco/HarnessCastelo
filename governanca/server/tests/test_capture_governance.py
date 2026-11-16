@@ -14,11 +14,13 @@ from sqlalchemy import delete, select
 from governanca.server.capture_app.analytics import router as analytics_router
 from governanca.server.capture_app.db import connect, initialize, iso
 from governanca.server.capture_app.integration import CAPTURE_PATHS, capture_app
-from governanca.server.capture_app.main import app as legacy_capture_app
+from governanca.server.capture_app.main import (MachineAssignmentRequest, app as legacy_capture_app,
+                                                request_machine_assignment)
+from governanca.server.capture_app.machine_identity import Machine
 from governanca.server.capture_app.settings import get_settings
 from governanca.server.identity.database import _session_factory, session_factory
 from governanca.server.identity.models import Department, Employee, GovernanceInvestigation, InternalSession, Organization
-from governanca.server.identity.auth import provision_department, provision_employee, provision_organization
+from governanca.server.identity.auth import EmployeeInfo, provision_department, provision_employee, provision_organization
 from governanca.server.app import app
 
 
@@ -153,6 +155,35 @@ class CaptureGovernanceTests(unittest.IsolatedAsyncioTestCase):
                 "SELECT employee_id FROM employees WHERE employee_id = ?", (code,),
             ).fetchone())
 
+    async def test_authenticated_employee_assignment_is_automatic_and_idempotent(self):
+        installation_id = uuid4()
+        with connect(get_settings()) as db:
+            db.execute(
+                """INSERT INTO machines (installation_id, public_key_json, key_fingerprint, created_at)
+                   VALUES (?, '{}', 'synthetic-fingerprint', ?)""",
+                (str(installation_id), iso(datetime.now(timezone.utc))),
+            )
+        async with session_factory()() as session:
+            employee = await session.scalar(select(Employee).where(Employee.code == self.viewer))
+        actor = EmployeeInfo(employee.id, self.viewer, self.org, self.department, "governance", False)
+        machine = Machine(str(installation_id), None, "synthetic-fingerprint", None, None, None)
+        payload = MachineAssignmentRequest(employee_id=self.viewer)
+        first = request_machine_assignment(installation_id, payload, machine, actor, get_settings())
+        second = request_machine_assignment(
+            installation_id, payload,
+            Machine(str(installation_id), self.viewer, "synthetic-fingerprint", self.viewer, self.department, None),
+            actor, get_settings(),
+        )
+        self.assertEqual(first["status"], "assigned")
+        self.assertEqual(second["status"], "assigned")
+        with connect(get_settings()) as db:
+            row = db.execute(
+                "SELECT employee_id, department_code, requested_employee_id FROM machines WHERE installation_id = ?",
+                (str(installation_id),),
+            ).fetchone()
+        self.assertEqual((row["employee_id"], row["department_code"], row["requested_employee_id"]),
+                         (self.viewer, self.department, None))
+
     async def test_auditor_cannot_decide_machine_assignment(self):
         async with session_factory()() as session, session.begin():
             auditor = await session.scalar(select(Employee).where(Employee.code == self.denied))
@@ -168,8 +199,7 @@ class CaptureGovernanceTests(unittest.IsolatedAsyncioTestCase):
     async def test_legacy_access_request_without_subject_cannot_grant_content_access(self):
         requested = await self.clients["viewer"].post(
             "/api/governance/investigations", headers={"Origin": "https://app.test"},
-            json={"purpose": "Apurar uma suspeita sobre o uso da extensão",
-                  "employee_code": self.other_employee},
+            json={"employee_code": self.other_employee},
         )
         self.assertEqual(requested.status_code, 200)
         async with session_factory()() as session, session.begin():
@@ -281,15 +311,13 @@ class CaptureGovernanceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((list_audit["event_type"], list_audit["record_count"]), ("content_read", 1))
 
         missing_subject = await client.post("/api/governance/investigations", headers={"Origin": "https://app.test"},
-                                            json={"purpose": "Apurar uma suspeita sobre o uso da extensão"})
+                                            json={})
         self.assertEqual(missing_subject.status_code, 422)
         unknown_subject = await client.post("/api/governance/investigations", headers={"Origin": "https://app.test"},
-                                            json={"purpose": "Apurar uma suspeita sobre o uso da extensão",
-                                                  "employee_code": "unknown"})
+                                            json={"employee_code": "unknown"})
         self.assertEqual(unknown_subject.status_code, 400)
         requested = await client.post("/api/governance/investigations", headers={"Origin": "https://app.test"},
-                                      json={"purpose": "Apurar uma suspeita sobre o uso da extensão",
-                                            "employee_code": self.viewer})
+                                      json={"employee_code": self.viewer})
         self.assertEqual(requested.status_code, 200, requested.text)
         case_id = requested.json()["id"]
         listed = await client.get("/api/governance/investigations")
@@ -310,6 +338,27 @@ class CaptureGovernanceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(detail.status_code, 200, detail.text)
         self.assertEqual(detail.json()["prompt"]["text"], "synthetic prompt")
         self.assertEqual(detail.json()["responses"][0]["text"], "synthetic response")
+        export = await client.get(
+            f"/api/capture/v1/employees/{self.viewer}/export", params={"investigation_id": case_id})
+        self.assertEqual(export.status_code, 200, export.text)
+        self.assertIn("attachment", export.headers["content-disposition"])
+        self.assertEqual(len(export.json()["interactions"]), 3)
+        self.assertEqual({item["employee_id"] for item in export.json()["interactions"]}, {self.viewer})
+        self.assertEqual(export.json()["interactions"][0]["responses"][0]["text"], "synthetic response")
+        tv_feed = await client.get("/api/capture/v1/admin/analytics/tv-interactions")
+        self.assertEqual(tv_feed.status_code, 200, tv_feed.text)
+        self.assertEqual(len(tv_feed.json()["items"]), 4)
+        self.assertEqual({item["employee_id"] for item in tv_feed.json()["items"]},
+                         {self.viewer, self.other_employee})
+        self.assertTrue(all("department_name" in item and item["prompt"] for item in tv_feed.json()["items"]))
+        with connect(get_settings()) as db:
+            tv_audit = db.execute(
+                """SELECT event_type, record_count FROM privacy_audit
+                   WHERE actor_id = ? AND action = ? ORDER BY audit_id DESC LIMIT 1""",
+                (self.viewer, "GET /v1/admin/analytics/tv-interactions period=48h"),
+            ).fetchone()
+        self.assertIsNotNone(tv_audit)
+        self.assertEqual((tv_audit["event_type"], tv_audit["record_count"]), ("content_read", 4))
         out_of_scope = await client.get(f"/api/capture/v1/interactions/{self.interaction_ids[3]}",
                                         params={"investigation_id": case_id})
         self.assertEqual(out_of_scope.status_code, 403)
@@ -322,3 +371,11 @@ class CaptureGovernanceTests(unittest.IsolatedAsyncioTestCase):
             ).fetchone()
         self.assertIsNotNone(audit)
         self.assertEqual((audit["event_type"], audit["record_count"]), ("content_read", 1))
+        with connect(get_settings()) as db:
+            export_audit = db.execute(
+                """SELECT event_type, record_count FROM privacy_audit
+                   WHERE actor_id = ? AND action = ? ORDER BY audit_id DESC LIMIT 1""",
+                (self.viewer, f"EXPORT /v1/employees/{self.viewer}/export investigation={case_id}"),
+            ).fetchone()
+        self.assertIsNotNone(export_audit)
+        self.assertEqual((export_audit["event_type"], export_audit["record_count"]), ("content_read", 3))

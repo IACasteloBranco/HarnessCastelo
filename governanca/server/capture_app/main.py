@@ -167,19 +167,26 @@ def request_machine_assignment(installation_id: UUID, payload: MachineAssignment
         if row is None or row["revoked_at"]:
             raise HTTPException(status_code=403, detail="Installation is unavailable")
         if row["employee_id"]:
-            raise HTTPException(status_code=409, detail="Installation is already assigned")
-        if row["requested_employee_id"]:
-            if row["requested_employee_id"] != payload.employee_id:
-                raise HTTPException(status_code=409, detail="Another assignment request is already pending")
-            return {"status": "pending", "employee_id": payload.employee_id,
-                    "person_name": employee["person_name"], "department_code": employee["department_code"],
-                    "requested_at": row["requested_at"]}
-        requested_at = iso(utc_now())
-        db.execute("UPDATE machines SET requested_employee_id = ?, requested_at = ? WHERE installation_id = ?",
-                   (payload.employee_id, requested_at, str(installation_id)))
-    return {"status": "pending", "employee_id": payload.employee_id,
+            if row["employee_id"] != payload.employee_id:
+                raise HTTPException(status_code=409, detail="Installation is assigned to another employee")
+            return {"status": "assigned", "employee_id": payload.employee_id,
+                    "person_name": employee["person_name"], "department_code": employee["department_code"]}
+        if row["requested_employee_id"] and row["requested_employee_id"] != payload.employee_id:
+            raise HTTPException(status_code=409, detail="Installation has another employee assignment")
+        requested_at = row["requested_at"] or iso(utc_now())
+        cursor = db.execute(
+            """UPDATE machines SET person_name = ?, employee_id = ?, department_code = ?, assigned_at = ?,
+                      requested_employee_id = NULL, requested_at = NULL
+               WHERE installation_id = ? AND employee_id IS NULL AND revoked_at IS NULL
+                 AND (requested_employee_id IS NULL OR requested_employee_id = ?)""",
+            (employee["person_name"], payload.employee_id, employee["department_code"], requested_at,
+             str(installation_id), payload.employee_id),
+        )
+        if cursor.rowcount != 1:
+            raise HTTPException(status_code=409, detail="Installation assignment changed; try again")
+    return {"status": "assigned", "employee_id": payload.employee_id,
             "person_name": employee["person_name"], "department_code": employee["department_code"],
-            "requested_at": requested_at}
+            "assigned_at": requested_at}
 
 
 @app.get("/v1/machines/{installation_id}")
@@ -612,7 +619,7 @@ async def get_interaction(interaction_id: UUID, investigation_id: UUID, response
         try:
             await require_investigation_for_code(viewer["actor_id"], investigation_id, row["employee_id"])
         except InvestigationDenied:
-            raise HTTPException(status_code=403, detail="approved investigation required")
+            raise HTTPException(status_code=403, detail="active investigation required")
         responses = db.execute(
             "SELECT client_event_id, text, capture_status, adapter_version, observed_at, received_at, generated_materials_json FROM responses WHERE interaction_id = ? ORDER BY received_at",
             (str(interaction_id),),
@@ -659,3 +666,34 @@ async def get_interaction(interaction_id: UUID, investigation_id: UUID, response
             for item in events
         ],
     )
+
+
+@app.get("/v1/employees/{employee_code}/export")
+async def export_employee_interactions(employee_code: str, investigation_id: UUID, response: Response,
+                                       viewer: dict = Depends(require_content_viewer),
+                                       settings: Settings = Depends(get_settings)):
+    response.headers["Cache-Control"] = "no-store"
+    from governanca.server.identity.investigations import InvestigationDenied, require_investigation_for_code
+    try:
+        await require_investigation_for_code(viewer["actor_id"], investigation_id, employee_code)
+    except InvestigationDenied as exc:
+        raise HTTPException(status_code=403, detail="active investigation required") from exc
+    with connect(settings) as db:
+        rows = db.execute(
+            """SELECT i.interaction_id FROM interactions AS i
+               WHERE i.employee_id = ? AND EXISTS (
+                   SELECT 1 FROM public.employees AS employee
+                   WHERE employee.code = i.employee_id
+                     AND employee.organization_id = (SELECT id FROM public.organizations WHERE code = ?))
+               ORDER BY i.received_at, i.interaction_id""",
+            (employee_code, viewer["organization_code"]),
+        ).fetchall()
+    interactions = [await get_interaction(UUID(row["interaction_id"]), investigation_id,
+                                          Response(), viewer, settings) for row in rows]
+    with connect(settings) as db:
+        record_privacy_audit(db, "content_read", viewer["actor_sub"],
+                             f"EXPORT /v1/employees/{employee_code}/export investigation={investigation_id}",
+                             len(interactions))
+    response.headers["Content-Disposition"] = 'attachment; filename="employee-interactions.json"'
+    return {"employee_code": employee_code, "investigation_id": investigation_id,
+            "exported_at": utc_now(), "interactions": interactions}

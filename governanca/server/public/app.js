@@ -18,6 +18,7 @@ async function api(url, options = {}) {
 }
 function errorMessage(error) { $('message').textContent = error.message; }
 let activeCase = null;
+let temporaryPassword = '';
 let detailVersion = 0;
 let interactionVersion = 0;
 let analyticsVersion = 0;
@@ -94,6 +95,8 @@ async function investigations() {
       clearDetail();
       $('active-case').textContent = 'Nenhuma investigação ativa.';
     }
+    $('export-interactions').hidden = !activeCase?.can_use || !activeCase.target_employee_code ||
+      Date.parse(activeCase.expires_at) <= Date.now();
     for (const item of cases) {
       const row = document.createElement('li');
       const description = document.createElement('span');
@@ -107,6 +110,7 @@ async function investigations() {
           activeCase = item;
           clearDetail();
           $('active-case').textContent = `Acesso ativo para ${item.target_employee_code} até ${item.expires_at}.`;
+          $('export-interactions').hidden = false;
           await interactions();
         });
         row.append(button);
@@ -115,31 +119,16 @@ async function investigations() {
     }
   } catch (error) { errorMessage(error); }
 }
-async function machines() {
+async function accountDepartments() {
   try {
-    const result = await api('/api/capture/v1/admin/machines/assignment-requests');
-    if ($('portal-screen').hidden) return;
-    const target = $('machines');
-    target.replaceChildren();
-    for (const item of result.items) {
-      const row = document.createElement('li');
-      const label = document.createElement('span');
-      label.textContent = `${item.installation_id} · ${item.requested_employee_id} · ${item.person_name || 'Não atribuído'} · ${item.department_code || ''}`;
-      row.append(label);
-      for (const action of ['approve', 'reject']) {
-        if (action === 'approve' && !item.can_approve) continue;
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.textContent = action === 'approve' ? 'Aprovar' : 'Rejeitar';
-        button.addEventListener('click', async () => {
-          try {
-            await api(`/api/capture/v1/admin/machines/${encodeURIComponent(item.installation_id)}/assignment-request/${action}`, { method: 'POST' });
-            await machines();
-          } catch (error) { errorMessage(error); }
-        });
-        row.append(button);
-      }
-      target.append(row);
+    const result = await api('/api/auth/governance/departments');
+    const select = $('account-department');
+    select.replaceChildren();
+    for (const department of result.departments) {
+      const option = document.createElement('option');
+      option.value = department.code;
+      option.textContent = `${department.name} (${department.code})`;
+      select.append(option);
     }
   } catch (error) { errorMessage(error); }
 }
@@ -217,6 +206,7 @@ async function tvDashboard() {
   const query = `?${params}`;
   try {
     const summary = await api(`/api/capture/v1/admin/analytics/tv${query}`);
+    await tvInteractions();
     const totals = summary.totals;
     const departments = (summary.by_department || []).filter(item => item.interactions > 0);
     const platformRows = (summary.by_platform || []).map(item => ({
@@ -242,10 +232,33 @@ async function tvDashboard() {
     $('tv-error').textContent = '';
     tvHasData = true;
   } catch (error) {
+    $('tv-interactions-list').replaceChildren();
+    $('tv-content-status').textContent = 'Não foi possível carregar o conteúdo das interações.';
     $('tv-error').textContent = tvHasData
       ? 'Não foi possível atualizar. Os indicadores exibidos são da última consulta.'
       : 'Não foi possível carregar os dados da extensão. Confira a conexão e tente novamente.';
   }
+}
+async function tvInteractions() {
+  const result = await api('/api/capture/v1/admin/analytics/tv-interactions');
+  const target = $('tv-interactions-list');
+  target.replaceChildren();
+  for (const item of result.items) {
+    const card = document.createElement('article');
+    card.className = 'tv-interaction';
+    const heading = document.createElement('h4');
+    heading.textContent = `${item.person_name} · ${item.department_name} · ${item.platform}`;
+    const prompt = document.createElement('p');
+    prompt.textContent = `Prompt: ${item.prompt?.text || 'Sem texto capturado'}`;
+    card.append(heading, prompt);
+    for (const answer of item.responses || []) {
+      const response = document.createElement('p');
+      response.textContent = `Resposta: ${answer.text || 'Sem texto capturado'}`;
+      card.append(response);
+    }
+    target.append(card);
+  }
+  $('tv-content-status').textContent = `${result.items.length} interações recebidas nos últimos 2 dias.`;
 }
 async function interactions() {
   const version = ++interactionVersion;
@@ -257,7 +270,7 @@ async function interactions() {
     }
     const result = await api(`/api/capture/v1/admin/analytics/interactions${params.size ? `?${params}` : ''}`);
     if (version !== interactionVersion || $('portal-screen').hidden) return;
-    rows('interactions', result.items, ['interaction_id', 'employee_id', 'department_code', 'platform', 'status', 'received_at']);
+    rows('interactions', result.items, ['interaction_id', 'person_name', 'employee_id', 'department_name', 'department_code', 'platform', 'status', 'received_at']);
     $('interaction-count').textContent = `${result.total} interações`;
   } catch (error) { errorMessage(error); }
 }
@@ -270,12 +283,12 @@ async function session() {
         show('tv');
         await tvDashboard();
         clearInterval(tvRefreshTimer);
-        tvRefreshTimer = setInterval(() => { if (!document.hidden && location.pathname === '/tv') void tvDashboard(); }, 60_000);
+        tvRefreshTimer = setInterval(() => { if (!document.hidden && location.pathname === '/tv') void tvDashboard(); }, 30 * 60_000);
       } else {
         show('portal');
         await analytics();
         await investigations();
-        await machines();
+        await accountDepartments();
       }
     }
     else { show('login'); $('message').textContent = 'Acesso reservado à governança.'; }
@@ -303,14 +316,55 @@ $('investigation-form').addEventListener('submit', async event => {
   event.preventDefault();
   try {
     activeCase = await api('/api/governance/investigations', { method: 'POST', body: JSON.stringify({
-      purpose: $('purpose').value.trim(),
       employee_code: $('investigation-employee-code').value.trim(),
     }) });
     clearDetail();
     $('active-case').textContent = `Acesso registrado para ${activeCase.target_employee_code} até ${activeCase.expires_at}.`;
+    $('export-interactions').hidden = false;
     $('investigation-form').reset();
     await investigations();
     await interactions();
+  } catch (error) { errorMessage(error); }
+});
+$('export-interactions').addEventListener('click', async () => {
+  if (!activeCase?.target_employee_code) return;
+  const url = `/api/capture/v1/employees/${encodeURIComponent(activeCase.target_employee_code)}/export?investigation_id=${encodeURIComponent(activeCase.id)}`;
+  try {
+    const response = await fetch(url, {credentials: 'same-origin'});
+    if (!response.ok) throw Error((await response.json()).detail || 'Falha na exportação.');
+    const blob = await response.blob();
+    const link = document.createElement('a');
+    const objectUrl = URL.createObjectURL(blob);
+    link.href = objectUrl;
+    link.download = `interacoes-${activeCase.target_employee_code}.json`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+  } catch (error) { errorMessage(error); }
+});
+$('account-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  temporaryPassword = '';
+  $('copy-temporary-password').hidden = true;
+  $('account-result').textContent = '';
+  try {
+    const result = await api('/api/auth/governance/accounts', { method: 'POST', body: JSON.stringify({
+      employee_code: $('account-code').value.trim(),
+      display_name: $('account-name').value.trim(),
+      department_code: $('account-department').value,
+    }) });
+    temporaryPassword = result.temporary_password;
+    $('account-result').textContent = `Conta ${result.employee_code} criada. Senha temporária: ${temporaryPassword}. Ela será exibida apenas nesta sessão e deverá ser trocada no primeiro acesso.`;
+    $('copy-temporary-password').hidden = false;
+    $('account-form').reset();
+  } catch (error) { errorMessage(error); }
+});
+$('copy-temporary-password').addEventListener('click', async () => {
+  if (!temporaryPassword) return;
+  try {
+    await navigator.clipboard.writeText(temporaryPassword);
+    $('account-result').textContent = 'Senha temporária copiada. Ela será exigida no primeiro acesso.';
   } catch (error) { errorMessage(error); }
 });
 $('change-form').addEventListener('submit', async event => {
@@ -333,7 +387,10 @@ $('logout').addEventListener('click', async () => {
     analyticsVersion++;
     clearDetail();
     for (const id of ['summary', 'interaction-count', 'active-case', 'message']) $(id).textContent = '';
-    for (const id of ['departments', 'interactions', 'investigations', 'machines']) $(id).replaceChildren();
+    for (const id of ['departments', 'interactions', 'investigations']) $(id).replaceChildren();
+    temporaryPassword = '';
+    $('account-result').textContent = '';
+    $('copy-temporary-password').hidden = true;
     show('login');
   } catch (error) { errorMessage(error); }
 });
@@ -342,5 +399,14 @@ $('tv-fullscreen').addEventListener('click', async () => {
     if (document.fullscreenElement) await document.exitFullscreen();
     else await document.documentElement.requestFullscreen();
   } catch { $('tv-error').textContent = 'O navegador não permitiu ativar a tela cheia.'; }
+});
+$('tv-logout').addEventListener('click', async () => {
+  try {
+    await api('/api/auth/logout', {method: 'POST'});
+    clearInterval(tvRefreshTimer);
+    $('tv-interactions-list').replaceChildren();
+    $('tv-content-status').textContent = '';
+    show('login');
+  } catch (error) { errorMessage(error); }
 });
 void session();

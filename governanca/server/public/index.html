@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; base-uri 'none'; object-src 'none'; form-action 'self'">
   <title>Governança de IA</title>
-  <link rel="stylesheet" href="./portal.css?v=20261110-tv">
-  <script defer src="./app.js?v=20261110-tv"></script>
+  <link rel="stylesheet" href="./portal.css?v=20261116-content-tv">
+  <script defer src="./app.js?v=20261116-content-tv"></script>
 </head>
 <body>
   <header>
@@ -57,16 +57,26 @@
       </section>
       <section aria-labelledby="investigations-title">
         <h3 id="investigations-title">Acesso a interações</h3>
-        <p>Informe a finalidade e o colaborador. O acesso ao conteúdo é liberado por uma hora e registrado para auditoria.</p>
+        <p>Selecione o colaborador e solicite o acesso pelo botão. A liberação é automática por uma hora e fica registrada para auditoria.</p>
         <form id="investigation-form">
-          <label>Finalidade (mínimo 20 caracteres) <textarea id="purpose" required minlength="20" maxlength="2000"></textarea></label>
           <label>Código do colaborador <input id="investigation-employee-code" required maxlength="128"></label>
-          <button>Registrar solicitação e acessar</button>
+          <button>Solicitar acesso ao conteúdo</button>
         </form>
         <p id="active-case"></p><ul id="investigations"></ul>
+        <button id="export-interactions" type="button" hidden>Exportar todas as interações do colaborador</button>
         <h4>Conteúdo da interação</h4><div id="detail"></div>
       </section>
-      <section aria-labelledby="machines-title"><h3 id="machines-title">Aprovações de máquinas</h3><ul id="machines"></ul></section>
+      <section aria-labelledby="accounts-title">
+        <h3 id="accounts-title">Criar colaborador</h3>
+        <form id="account-form">
+          <label>Código do colaborador <input id="account-code" required maxlength="128"></label>
+          <label>Nome <input id="account-name" required maxlength="255"></label>
+          <label>Departamento <select id="account-department" required></select></label>
+          <button>Criar conta</button>
+        </form>
+        <p id="account-result" role="status" aria-live="polite"></p>
+        <button id="copy-temporary-password" type="button" hidden>Copiar senha temporária</button>
+      </section>
     </section>
     <section id="tv-screen" hidden aria-labelledby="tv-title">
       <div class="tv-shell">
@@ -78,6 +88,7 @@
           <div class="tv-header-actions">
             <span class="tv-scope">Somente dados da extensão</span>
             <button id="tv-fullscreen" type="button">Tela cheia</button>
+            <button id="tv-logout" type="button">Sair</button>
           </div>
         </header>
         <div class="tv-meta">
@@ -85,6 +96,12 @@
           <span><span id="tv-last-event">Último evento: aguardando dados</span> · <span id="tv-last-updated">Atualizando painel...</span></span>
         </div>
         <p id="tv-error" role="status" aria-live="polite"></p>
+        <section class="tv-content-access" aria-labelledby="tv-content-title">
+          <h3 id="tv-content-title">Prompts e respostas dos últimos 2 dias</h3>
+          <p>O conteúdo é carregado automaticamente para a sessão autenticada da Governança e atualizado a cada 30 minutos. Cada consulta é registrada.</p>
+          <p id="tv-content-status" role="status" aria-live="polite"></p>
+          <div id="tv-interactions-list" class="tv-interactions-list" aria-live="polite"></div>
+        </section>
         <div id="tv-empty" hidden>Sem interações registradas pela extensão hoje.</div>
         <div class="tv-metrics" aria-label="Indicadores de hoje">
           <article><span>Interações capturadas hoje</span><strong id="tv-interactions">—</strong></article>

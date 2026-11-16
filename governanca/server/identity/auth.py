@@ -89,9 +89,11 @@ async def provision_department(organization_code: str, code: str, name: str) -> 
 
 
 async def provision_employee(
-    organization_code: str, employee_code: str, role: str, department_code: str | None = None
+    organization_code: str, employee_code: str, role: str, department_code: str | None = None,
+    display_name: str | None = None,
 ) -> str:
     organization_code, employee_code = _code(organization_code, 64), _code(employee_code, 128)
+    display_name = _name(display_name) if display_name else None
     if role not in {"collaborator", "auditor", "governance"}:
         raise ValueError("invalid role")
     if role in {"collaborator", "auditor"} and not department_code:
@@ -115,7 +117,7 @@ async def provision_employee(
                 raise ValueError("department not found")
         session.add(Employee(
             id=uuid4(), organization_id=organization.id, department_id=department_id,
-            code=employee_code, role=role, password_hash=encoded, must_change_password=True,
+            code=employee_code, display_name=display_name, role=role, password_hash=encoded, must_change_password=True,
             disabled=False, failed_logins=0, created_at=datetime.now(timezone.utc),
         ))
     return password

@@ -74,7 +74,7 @@ def begin_write(db: Any, *tables: str) -> None:
 
 def _create_employee_views(db: Any) -> None:
     db.execute("""CREATE OR REPLACE VIEW employees AS
-        SELECT employee.code AS employee_id, employee.code AS person_name,
+        SELECT employee.code AS employee_id, COALESCE(employee.display_name, employee.code) AS person_name,
                department.code AS department_code,
                CASE WHEN employee.disabled THEN 0 ELSE 1 END::SMALLINT AS active,
                employee.created_at AS created_at, employee.created_at AS updated_at,
@@ -83,7 +83,7 @@ def _create_employee_views(db: Any) -> None:
         JOIN public.departments AS department ON department.id = employee.department_id
         WHERE employee.role IN ('collaborator', 'auditor')""")
     db.execute("""CREATE OR REPLACE VIEW machine_assignment_employees AS
-        SELECT employee.code AS employee_id, employee.code AS person_name,
+        SELECT employee.code AS employee_id, COALESCE(employee.display_name, employee.code) AS person_name,
                department.code AS department_code,
                CASE WHEN employee.disabled THEN 0 ELSE 1 END::SMALLINT AS active,
                employee.created_at AS created_at, employee.created_at AS updated_at,
@@ -167,7 +167,7 @@ def _initialize_postgres(db: Any) -> None:
                    created_at AS created_at, created_at AS updated_at, id AS department_id, organization_id
             FROM public.departments""",
         """CREATE VIEW employees AS
-            SELECT employee.code AS employee_id, employee.code AS person_name,
+            SELECT employee.code AS employee_id, COALESCE(employee.display_name, employee.code) AS person_name,
                    department.code AS department_code,
                    CASE WHEN employee.disabled THEN 0 ELSE 1 END::SMALLINT AS active,
                    employee.created_at AS created_at, employee.created_at AS updated_at,

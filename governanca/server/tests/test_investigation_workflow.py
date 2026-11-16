@@ -48,8 +48,7 @@ class InvestigationWorkflowTests(unittest.IsolatedAsyncioTestCase):
         session = Session({actor_id: actor, other_id: other}, subject)
 
         with patch.object(investigations, "session_factory", return_value=lambda: session):
-            result = await investigations.request_investigation(
-                actor_id, "Review of a reported interaction", "EMP1")
+            result = await investigations.request_investigation(actor_id, "EMP1")
             await investigations.require_investigation(actor_id, result["id"], subject.id)
             with self.assertRaises(investigations.InvestigationDenied):
                 await investigations.require_investigation(other_id, result["id"], subject.id)

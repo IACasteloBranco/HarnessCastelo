@@ -1,8 +1,7 @@
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 from typing import Literal
-
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from .db import connect, iso, record_privacy_audit
@@ -235,6 +234,58 @@ def tv_analytics(
     }
 
 
+@router.get("/tv-interactions")
+async def tv_interactions(response: Response,
+                          viewer: dict = Depends(require_content_viewer),
+                          settings: Settings = Depends(get_settings)) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    now = datetime.now(timezone.utc)
+    cutoff = iso(now - timedelta(days=2))
+    until = iso(now)
+    with connect(settings) as db:
+        rows = db.execute(
+            """SELECT i.interaction_id, i.employee_id,
+                      COALESCE(e.display_name, i.attributed_person, i.employee_id, 'Não atribuído') AS person_name,
+                      i.department_code, COALESCE(d.name, i.department_code, 'Não atribuído') AS department_name,
+                      i.platform, i.received_at, i.prompt_json
+               FROM interactions i
+               LEFT JOIN public.employees e ON e.code = i.employee_id
+               LEFT JOIN public.departments d ON d.code = i.department_code
+                   AND d.organization_id = e.organization_id
+               WHERE i.received_at >= ? AND i.received_at <= ? AND EXISTS (
+                   SELECT 1 FROM public.employees AS employee
+                   WHERE employee.code = i.employee_id
+                     AND employee.organization_id = (SELECT id FROM public.organizations WHERE code = ?))
+               ORDER BY i.received_at DESC""",
+            (cutoff, until, viewer["organization_code"]),
+        ).fetchall()
+        responses = db.execute(
+            """SELECT r.interaction_id, r.text, r.capture_status, r.received_at
+               FROM responses r
+               JOIN interactions i ON i.interaction_id = r.interaction_id
+               WHERE i.received_at >= ? AND i.received_at <= ? AND EXISTS (
+                   SELECT 1 FROM public.employees AS employee
+                   WHERE employee.code = i.employee_id
+                     AND employee.organization_id = (SELECT id FROM public.organizations WHERE code = ?))
+               ORDER BY r.received_at""",
+            (cutoff, until, viewer["organization_code"]),
+        ).fetchall()
+        responses_by_interaction = {}
+        for item in responses:
+            responses_by_interaction.setdefault(item["interaction_id"], []).append({
+                "text": item["text"], "capture_status": item["capture_status"],
+                "received_at": item["received_at"]})
+        record_privacy_audit(db, "content_read", viewer["actor_sub"],
+                             "GET /v1/admin/analytics/tv-interactions period=48h",
+                             len(rows))
+    return {"period": {"from": cutoff, "to": until},
+            "items": [{"interaction_id": row["interaction_id"], "employee_id": row["employee_id"],
+                       "person_name": row["person_name"], "department_code": row["department_code"],
+                       "department_name": row["department_name"], "platform": row["platform"],
+                       "received_at": row["received_at"], "prompt": json.loads(row["prompt_json"]),
+                       "responses": responses_by_interaction.get(row["interaction_id"], [])} for row in rows]}
+
+
 @router.get("/interactions")
 def search_interactions(
     response: Response,
@@ -292,6 +343,7 @@ def search_interactions(
         "items": [{
             "interaction_id": row["interaction_id"],
             "employee_id": row["employee_id"],
+            "person_name": row["person_name"],
             "department_code": row["department_code"],
             "department_name": row["department_name"],
             "platform": row["platform"],
