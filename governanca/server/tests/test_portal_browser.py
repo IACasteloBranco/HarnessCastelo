@@ -68,8 +68,8 @@ class PortalBrowserTest(unittest.TestCase):
                 payload = {"items": [], "total": 0}
             elif pathname == "governance/investigations":
                 payload = {"investigations": []}
-            elif pathname.endswith("machines/assignment-requests"):
-                payload = {"items": []}
+            elif pathname == "auth/governance/departments":
+                payload = {"departments": [{"code": "FIN", "name": "Financeiro"}]}
             else:
                 raise AssertionError(f"Unexpected API path: {pathname}")
             route.fulfill(status=status, content_type="application/json", body=json.dumps(payload))
@@ -96,6 +96,8 @@ class PortalBrowserTest(unittest.TestCase):
                 page.locator("#change-form button").click()
                 page.locator("#portal-screen").wait_for(state="visible")
                 page.locator("#summary").get_by_text("Interações: 1", exact=False).wait_for()
+                page.locator("#account-form").wait_for(state="visible")
+                self.assertEqual(page.get_by_text("Aprovações de máquinas").count(), 0)
                 self.assertTrue(page.url.endswith("/"))
                 self.assertTrue(any("analytics/summary" in path for path in requests))
             finally:

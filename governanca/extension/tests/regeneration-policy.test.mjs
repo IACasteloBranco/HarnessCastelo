@@ -47,7 +47,7 @@ test('re-evaluates policy and resumes the menu click only after restoring the in
     return message.type === 'inspect_sensitive_text'
       ? {ok: true, data: {action: 'allow', requires_confirmation: false, categories: [], policy_version: 'governanca-1'}} : undefined;
   }}};
-  const context = {window, document, chrome, location: {origin: 'https://chatgpt.com'}, URL,
+  const context = {window, document, chrome, location: {origin: 'https://chatgpt.com', href: 'https://chatgpt.com/c/synthetic'}, URL,
     Date, setTimeout: () => {}, globalThis: {GovernancaCaptureRegeneration: (text, key) => {
       regenerated.push([text, key]); return Promise.resolve(true);
     }}};

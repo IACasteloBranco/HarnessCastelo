@@ -5,8 +5,8 @@ import {readFile} from 'node:fs/promises';
 test('o pacote limita a injeção ao ChatGPT, ao Claude e à API do Harness', async () => {
   const manifest = JSON.parse(await readFile(new URL('../manifest.json', import.meta.url)));
   assert.equal(manifest.manifest_version, 3);
-  assert.deepEqual(manifest.host_permissions, ['https://chatgpt.com/*', 'https://claude.ai/*', 'http://127.0.0.1:18081/*']);
-  assert.equal(manifest.version, '0.6.1');
+  assert.deepEqual(manifest.host_permissions, ['https://chatgpt.com/*', 'https://claude.ai/*', 'https://governanca.castelotecnologia.com.br/*']);
+  assert.equal(manifest.version, '0.6.5');
   assert.deepEqual(manifest.permissions, ['storage', 'tabs', 'alarms']);
   assert.deepEqual(manifest.content_scripts.map(script => [script.world, script.run_at]), [
     ['MAIN', 'document_start'], ['MAIN', 'document_start'],
@@ -29,7 +29,7 @@ test('o pacote limita a injeção ao ChatGPT, ao Claude e à API do Harness', as
   assert.match(worker, /!validConversationObservation\(item\.conversation, sender\.url\)/);
   await readFile(new URL('../src/background/capture-validation.js', import.meta.url));
   const config = await readFile(new URL('../src/background/config.js', import.meta.url), 'utf8');
-  assert.match(config, /apiUrl: 'http:\/\/127\.0\.0\.1:18081'/);
+  assert.match(config, /apiUrl: 'https:\/\/governanca\.castelotecnologia\.com\.br'/);
   assert.match(worker, /import \{CONFIG\} from '\.\/config\.js'/);
   assert.match(worker, /const API = CONFIG\.apiUrl\.replace/);
   assert.doesNotMatch(worker, /127\.0\.0\.1:18080/);
@@ -37,6 +37,7 @@ test('o pacote limita a injeção ao ChatGPT, ao Claude e à API do Harness', as
   assert.match(worker, /device_installation_id: installationId/);
   const popup = await readFile(new URL('../src/popup/popup.html', import.meta.url), 'utf8');
   assert.match(popup, /Captura prompts e respostas do ChatGPT e do Claude/);
+  assert.doesNotMatch(popup, /Atualizar identificação|Solicitar vínculo/);
   assert.match(popup, /metadados observados registrados, sem leitura do conteúdo do arquivo/);
   assert.doesNotMatch(popup, /Não envia nem grava prompts ou respostas/);
 });

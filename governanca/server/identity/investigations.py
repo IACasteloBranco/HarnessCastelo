@@ -18,10 +18,8 @@ def _active(actor: Employee | None) -> bool:
                 and not actor.must_change_password)
 
 
-async def request_investigation(actor_id: UUID, purpose: str, employee_code: str) -> dict:
-    purpose = purpose.strip()
-    if len(purpose) < 20 or len(purpose) > 2000:
-        raise ValueError("A finalidade é obrigatória e deve ter entre 20 e 2000 caracteres.")
+async def request_investigation(actor_id: UUID, employee_code: str) -> dict:
+    purpose = "Solicitado pelo botão na plataforma da Governança."
     async with session_factory()() as session, session.begin():
         actor = await session.get(Employee, actor_id)
         if actor is None or not _active(actor):

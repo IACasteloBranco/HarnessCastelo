@@ -168,11 +168,12 @@ test('Enter, clique e submit ficam bloqueados quando a inspeção não responde'
   assert.equal(attributes.get('data-governanca-block-prompts'), 'block');
 });
 
-test('clique e Enter enviam a prévia mascarada somente após confirmação', async () => {
+test('aplica a prévia mascarada ao rascunho sem enviar', async () => {
   const listeners = new Map();
   const attributes = new Map();
   const previews = [];
   const dialogs = [];
+  const notices = [];
   const field = {textContent: 'CPF 123.456.789-09', contains: target => target === field,
     closest: () => form, focus() {}, dispatchEvent() {}, get innerText() { return this.textContent; }};
   const form = {contains: () => true, querySelectorAll: () => [button]};
@@ -188,7 +189,7 @@ test('clique e Enter enviam a prévia mascarada somente após confirmação', as
     append(...children) { this.children.push(...children); }, setAttribute() {}, remove() {}, close() {},
     showModal() { previews.push(this.children[2].textContent); setTimeout(() => this.children[3].children[1].click(), 0); },
     click() { this.click?.(); }});
-  const document = {documentElement: root, body: {append() {}}, addEventListener() {},
+  const document = {documentElement: root, body: {append(...nodes) {notices.push(...nodes);}}, addEventListener() {},
     querySelector: selector => selector === '#prompt-textarea' ? field : null, querySelectorAll: () => [],
     createElement: tag => {
       const node = makeNode(tag);
@@ -222,20 +223,11 @@ test('clique e Enter enviam a prévia mascarada somente após confirmação', as
   assert.deepEqual(previews, ['CPF [CPF_1]']);
   assert.equal(dialogs[0].className, 'governanca-mask-dialog');
   assert.match(dialogs[0].style.cssText, /#102f4a/);
-  assert.equal(dialogs[0].children[3].children[1].className, 'governanca-mask-confirm');
+  assert.equal(dialogs[0].children[3].children[1].textContent, 'Aplicar máscara ao rascunho');
   assert.equal(field.textContent, 'CPF [CPF_1]');
-  assert.equal(captures, 1);
-  assert.equal(attributes.get('data-governanca-block-prompts'), 'allow');
-  await new Promise(resolve => setTimeout(resolve, 510));
-  field.textContent = 'CPF 123.456.789-09';
-  const enter = {key: 'Enter', shiftKey: false, isComposing: false, target: field,
-    preventDefault() { this.prevented = true; }, stopImmediatePropagation() {}};
-  listeners.get('keydown')(enter);
-  assert.equal(enter.prevented, true);
-  await new Promise(resolve => setTimeout(resolve, 20));
-  assert.equal(captures, 2);
-  assert.equal(field.textContent, 'CPF [CPF_1]');
-  assert.deepEqual(previews, ['CPF [CPF_1]', 'CPF [CPF_1]']);
+  assert.equal(captures, 0);
+  assert.equal(attributes.get('data-governanca-block-prompts'), 'block');
+  assert.match(notices.at(-1).textContent, /aplicado ao rascunho.*clique em Enviar/i);
 });
 
 test('anexo visível recebe tempo para upload e mantém a barreira de uso único', () => {
@@ -313,7 +305,7 @@ test('network-blocked attempt rechecks composer text without capturing or allowi
     marker: 'governanca-ai-prompt-block-v1', phase: 'network_blocked', reason: 'missing'
   }});
   assert.equal(messages.filter(message => message.type === 'prompt_decision').at(-1).action, 'ALLOW');
-  assert.match(notices.at(-1).textContent, /continua no compositor; revise e use Enviar/i);
+  assert.match(notices.at(-1).textContent, /Revise o rascunho e use Enviar novamente/i);
   assert.equal(captureCount, 0);
   assert.equal(attributes.get('data-governanca-block-prompts'), 'block');
 });

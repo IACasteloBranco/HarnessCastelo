@@ -9,7 +9,10 @@ async function refresh() {
   const config = await send({type: 'status'});
   currentConfig = config;
   $('enabled').checked = config.enabled;
-  $('enabled').disabled = !config.privacyNotice.accepted;
+  $('enabled').disabled = !config.privacyNotice.accepted && !config.enabled;
+  $('capture-readiness').textContent = config.enabled && !config.captureAllowed
+    ? 'Ativação salva, mas a captura está pausada até sessão, aviso e vínculo estarem válidos. Pode retomar quando forem restabelecidos; desmarque e salve para desligá-la.'
+    : config.captureAllowed ? 'Pronta para capturar; cada envio ainda depende da disponibilidade da API.' : 'Captura desativada.';
   $('privacy-notice').hidden = config.privacyNotice.accepted;
   $('privacy-version').textContent = config.privacyNotice.version;
   $('privacy-ack').disabled = config.privacyNotice.accepted;
@@ -26,9 +29,6 @@ async function refresh() {
   $('account').textContent = config.employeeCode
     ? `Sessão Harness: ${config.employeeCode}. Expira em ${new Date(config.expiresAt * 1000).toLocaleString('pt-BR')}.`
     : config.authProblem || (config.configured ? 'Entre com seu código e senha do Harness.' : 'URL do servidor Harness inválida.');
-  const machineInfo = config.machineInfo;
-  $('assignment-request').hidden = Boolean(machineInfo?.requested_employee_id || machineInfo?.employee_id);
-  $('identity').textContent = `Instalação: ${config.installationId}\nColaborador: ${machineInfo?.person_name || 'aguardando atribuição'}\nID: ${machineInfo?.employee_id || 'pendente'}\nPedido pendente: ${machineInfo?.requested_employee_id || 'nenhum'}\nDepartamento: ${machineInfo?.department_code || 'pendente'}\nFingerprint: ${machineInfo?.key_fingerprint || 'cadastre a instalação'}\nChave: ${machineInfo?.key_matches === false ? 'diverge do cadastro' : machineInfo?.key_matches ? 'conferida' : 'não verificada'}`;
   const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
   if (!tab?.id) { $('probe-status').textContent = 'Nenhuma aba ativa.'; return; }
   try {
@@ -45,7 +45,10 @@ $('config').addEventListener('submit', async event => {
     await send({type: 'save', enabled: $('enabled').checked});
     $('status').textContent = 'Configuração salva. Recarregue a aba do ChatGPT ou Claude.';
     await refresh();
-  } catch (error) { $('status').textContent = error.message; }
+  } catch (error) {
+    $('status').textContent = error.message;
+    await refresh().catch(() => {});
+  }
 });
 $('privacy-ack').addEventListener('change', () => {
   $('accept-privacy').disabled = !$('privacy-ack').checked || !currentConfig?.employeeCode;
@@ -54,7 +57,7 @@ $('accept-privacy').addEventListener('click', async () => {
   try {
     if (!$('privacy-ack').checked) throw new Error('Marque a confirmação depois de ler o aviso.');
     await send({type: 'accept_privacy_notice', version: currentConfig.privacyNotice.version});
-    $('status').textContent = 'Ciência registrada. A captura permanece desativada até você ativá-la.';
+    $('status').textContent = 'Ciência registrada. Captura ativada para a conta autenticada.';
     await refresh();
   } catch (error) { $('status').textContent = error.message; }
 });
@@ -75,9 +78,12 @@ $('login').addEventListener('click', async () => {
       $('status').textContent = 'Troque sua senha temporária na página da Governança e depois entre novamente na extensão.';
       return;
     }
-    $('status').textContent = 'Sessão Harness iniciada. Confira a atribuição da instalação antes de ativar a captura.';
+    $('status').textContent = 'Sessão iniciada. A instalação foi vinculada automaticamente à sua conta.';
     await refresh();
-  } catch (error) { $('status').textContent = error.message; }
+  } catch (error) {
+    $('status').textContent = error.message;
+    await refresh().catch(() => {});
+  }
   finally { $('password').value = ''; }
 });
 $('logout').addEventListener('click', async () => {
@@ -87,24 +93,5 @@ $('logout').addEventListener('click', async () => {
 $('health').addEventListener('click', async () => {
   try { await send({type: 'health'}); $('status').textContent = 'API Harness disponível.'; }
   catch (error) { $('status').textContent = error.message; }
-});
-$('register-machine').addEventListener('click', async () => {
-  try {
-    const result = await send({type: 'machine_register'});
-    $('status').textContent = result.key_matches === false
-      ? 'A chave local diverge do cadastro desta instalação. O bloqueio continua fechado; peça ao operador para verificar o fingerprint.'
-      : result.person_name
-      ? `Instalação atribuída a ${result.person_name}.`
-      : `Instalação ${result.installation_id} cadastrada; atribua o fingerprint ${result.key_fingerprint?.slice(0, 16) || '(indisponível)'}.`;
-    await refresh();
-  } catch (error) { $('status').textContent = error.message; }
-});
-$('assignment-request').addEventListener('submit', async event => {
-  event.preventDefault();
-  try {
-    const request = await send({type: 'machine_assignment_request', employeeId: $('employee-id').value});
-    $('status').textContent = `Pedido registrado para ${request.person_name} (${request.department_code}). A captura ficará bloqueada até a aprovação do operador.`;
-    await refresh();
-  } catch (error) { $('status').textContent = error.message; }
 });
 refresh().catch(error => { $('status').textContent = error.message; });

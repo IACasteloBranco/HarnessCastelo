@@ -13,7 +13,6 @@ router = APIRouter(prefix="/api/governance/investigations", tags=["investigation
 
 
 class InvestigationRequest(BaseModel):
-    purpose: str = Field(min_length=20, max_length=2000)
     employee_code: str = Field(min_length=1, max_length=128)
 
 
@@ -34,7 +33,7 @@ async def create_investigation(body: InvestigationRequest, request: Request,
     _check_origin(request)
     _governance(employee)
     try:
-        return await request_investigation(employee.employee_id, body.purpose, body.employee_code)
+        return await request_investigation(employee.employee_id, body.employee_code)
     except (InvestigationDenied, ValueError) as exc:
         _error(exc)
 

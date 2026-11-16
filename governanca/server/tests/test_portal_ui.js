@@ -16,25 +16,31 @@ function element() {
     async fire(type) { return this.listeners[type]({ preventDefault() {}, currentTarget: this }); },
   };
 }
-async function portal(responses) {
+async function portal(responses, pathname = '/') {
   const ids = {};
   const calls = [];
-  const location = { pathname: '/' };
+  const location = { pathname };
   const history = { replaceState(_state, _title, url) { location.pathname = url; } };
   const document = {
+    body: { classList: { toggle() {} } },
     getElementById(id) { return ids[id] ||= element(); },
     createElement() { return element(); },
   };
   const fetch = async (url, options = {}) => {
     calls.push({ url, options });
-    const result = responses[url];
+    const result = responses[url] ?? Object.entries(responses).sort(([a], [b]) => b.length - a.length)
+      .find(([key]) => url.startsWith(key))?.[1] ??
+      (url === '/api/auth/governance/departments' ? { departments: [] } : undefined);
     const value = typeof result === 'function' ? await result(options) : result;
     if (value === undefined) throw Error(`Unexpected request: ${url}`);
     return { ok: typeof value.status !== 'number' || value.status < 400,
       status: typeof value.status === 'number' ? value.status : 200,
       json: async () => value.body || value };
   };
-  vm.runInNewContext(fs.readFileSync(script, 'utf8'), { document, fetch, URLSearchParams, location, history, console });
+  vm.runInNewContext(fs.readFileSync(script, 'utf8'), {
+    document, fetch, URLSearchParams, location, history, console, Date, Intl,
+    setInterval() { return 1; }, clearInterval() {}, setTimeout() { return 1; }, clearTimeout() {},
+  });
   await new Promise(resolve => setImmediate(resolve));
   return { ids, calls, location, el: id => document.getElementById(id) };
 }
@@ -139,32 +145,51 @@ test('approved access scopes content and prevents stale detail from returning', 
   assert.equal(p.el('detail').children.length, 0);
 });
 
-test('machine approval lists pending assignments and respects server eligibility', async () => {
-  let items = [{ installation_id: 'machine-1', requested_employee_id: 'EMP1',
-    person_name: '<b>person</b>', department_code: 'FIN', can_approve: true },
-  { installation_id: 'machine-2', requested_employee_id: 'EMP2',
-    person_name: 'Other', department_code: 'FIN', can_approve: false }];
+test('governance creates collaborator credentials without machine approval controls', async () => {
   const p = await portal({
     '/api/auth/me': { role: 'governance', must_change_password: false },
     '/api/capture/v1/admin/analytics/summary': { totals: { interactions: 0, responses: 0 } },
     '/api/capture/v1/admin/analytics/departments': { departments: [] },
     '/api/capture/v1/admin/analytics/interactions': { items: [], total: 0 },
     '/api/governance/investigations': { investigations: [] },
-    '/api/capture/v1/admin/machines/assignment-requests': () => ({ items }),
-    '/api/capture/v1/admin/machines/machine-1/assignment-request/approve': () => {
-      items = items.slice(1); return { status: 'approved' };
-    },
+    '/api/auth/governance/accounts': { employee_code: 'EMP3', temporary_password: 'temp-unique', must_change_password: true },
   });
-  assert.equal(p.el('machines').children[0].children[0].textContent, 'machine-1 · EMP1 · <b>person</b> · FIN');
-  assert.equal(p.el('machines').children[1].children.some(child => child.textContent === 'Aprovar'), false);
-  await p.el('machines').children[0].children[1].fire('click');
-  assert.equal(p.el('machines').children.length, 1);
+  p.el('account-code').value = 'EMP3';
+  p.el('account-name').value = 'Pessoa Teste';
+  p.el('account-department').value = 'FIN';
+  await p.el('account-form').fire('submit');
+  assert.match(p.el('account-result').textContent, /temp-unique/);
+  assert.equal(p.el('copy-temporary-password').hidden, false);
+  assert.equal(p.calls.at(-1).url, '/api/auth/governance/accounts');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+  assert.doesNotMatch(html, /Aprovações de máquinas|Atualizar identificação|Solicitar vínculo/);
+});
+
+test('TV dashboard loads prompts and responses with employee and department', async () => {
+  const p = await portal({
+    '/api/auth/me': { role: 'governance', must_change_password: false },
+    '/api/capture/v1/admin/analytics/tv': { totals: { interactions: 1, employees: 1, departments: 1,
+      incomplete_responses: 0, last_activity_at: null }, by_department: [], by_platform: [] },
+    '/api/capture/v1/admin/analytics/tv-interactions': { items: [{
+      employee_id: 'CB-1', person_name: 'Pessoa teste', department_name: 'Fiscal',
+      platform: 'chatgpt_web', prompt: { text: 'prompt sintético' },
+      responses: [{ text: 'resposta sintética' }],
+    }] },
+  }, '/tv');
+  assert.match(p.el('tv-content-status').textContent, /últimos 2 dias/);
+  assert.match(p.el('tv-interactions-list').children[0].children[0].textContent, /Pessoa teste · Fiscal/);
+  assert.match(p.el('tv-interactions-list').children[0].children[1].textContent, /prompt sintético/);
+  assert.match(p.el('tv-interactions-list').children[0].children[2].textContent, /resposta sintética/);
+  assert.ok(p.calls.some(call => call.url === '/api/capture/v1/admin/analytics/tv-interactions'));
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+  assert.doesNotMatch(html, /tv-request-content|Solicitar exibição/);
 });
 
 test('standalone document has dedicated password gate and privacy notice', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
   for (const id of ['login-screen', 'change-screen', 'portal-screen', 'login-form', 'change-form',
-    'search-form', 'investigation-form', 'machines', 'detail']) {
+    'search-form', 'investigation-form', 'account-form', 'export-interactions', 'detail',
+    'tv-interactions-list']) {
     assert.match(html, new RegExp(`id="${id}"`));
   }
   assert.match(html, /href="\.\/privacidade\.html"/);
@@ -262,12 +287,11 @@ test('access request grants scoped use without a second approver', async () => {
       prompt: { text: 'synthetic prompt' }, responses: [{ text: 'synthetic response' }],
     },
   });
-  p.el('purpose').value = 'Suspeita documentada de vazamento';
   p.el('investigation-employee-code').value = 'EMP1';
   await p.el('investigation-form').fire('submit');
   const request = p.calls.find(call => call.url === '/api/governance/investigations' && call.options.method === 'POST');
   assert.deepEqual(JSON.parse(request.options.body), {
-    purpose: 'Suspeita documentada de vazamento', employee_code: 'EMP1',
+    employee_code: 'EMP1',
   });
   assert.match(p.el('active-case').textContent, /acesso registrado para EMP1 até 2099/i);
   assert.deepEqual(p.el('investigations').children[0].children

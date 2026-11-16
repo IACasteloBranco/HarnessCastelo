@@ -132,6 +132,12 @@ button:hover { border-color: #c5a353; background: #cdb064; }
 .tv-metrics article:last-child strong { color: #9a702d; }
 .tv-panels { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(300px, 1fr); gap: 1rem; margin-top: 1rem; }
 .tv-panel { min-width: 0; padding: 1.2rem 1.35rem; border: 1px solid #ddd4c6; border-radius: 12px; background: #fff; box-shadow: 0 5px 18px #102f4a0a; }
+.tv-content-access { margin-top: 1rem; }
+.tv-content-access h3 { margin-top: 0; }
+.tv-interactions-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); gap: .8rem; }
+.tv-interaction { min-width: 0; max-height: 24rem; overflow: auto; padding: 1rem; border: 1px solid #ddd4c6; border-radius: 10px; background: #fff; overflow-wrap: anywhere; }
+.tv-interaction h4 { margin: 0 0 .7rem; color: var(--castelo-navy); }
+.tv-interaction p { white-space: pre-wrap; }
 .tv-panel-heading h3 { margin: 0; font-size: 1.12rem; }
 .tv-panel-heading p { margin: .3rem 0 1.25rem; color: var(--muted); font-size: .82rem; }
 .tv-bars { display: grid; gap: 1rem; }
