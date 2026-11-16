@@ -1,5 +1,18 @@
 "use strict";
 const $ = id => document.getElementById(id);
+const markdown = typeof markdownit === 'function'
+  ? markdownit({ html: false, linkify: true, breaks: true }).disable('image') : null;
+function contentBlock(label, text) {
+  const block = document.createElement('div');
+  block.className = 'interaction-message markdown-content';
+  block.dataset.label = label;
+  block.setAttribute('role', 'group');
+  block.setAttribute('aria-label', label);
+  const content = String(text || 'Sem texto capturado');
+  if (markdown) block.innerHTML = markdown.render(content);
+  else block.textContent = content;
+  return block;
+}
 const requestedTv = location.pathname === '/tv';
 const show = screen => {
   for (const id of ['login', 'change', 'portal', 'tv']) $(`${id}-screen`).hidden = id !== screen;
@@ -75,11 +88,8 @@ async function detail(interactionId) {
   try {
     const result = await api(`/api/capture/v1/interactions/${encodeURIComponent(interactionId)}?investigation_id=${encodeURIComponent(investigationId)}`);
     if (version !== detailVersion || activeCase?.id !== investigationId || $('portal-screen').hidden) return;
-    for (const content of [result.prompt?.text, ...(result.responses || []).map(response => response.text)]) {
-      const paragraph = document.createElement('p');
-      paragraph.textContent = String(content ?? '');
-      $('detail').append(paragraph);
-    }
+    $('detail').append(contentBlock('Prompt', result.prompt?.text),
+      ...(result.responses || []).map((response, index) => contentBlock(`Resposta ${index + 1}`, response.text)));
   } catch (error) { errorMessage(error); }
 }
 async function investigations() {
@@ -248,14 +258,9 @@ async function tvInteractions() {
     card.className = 'tv-interaction';
     const heading = document.createElement('h4');
     heading.textContent = `${item.person_name} · ${item.department_name} · ${item.platform}`;
-    const prompt = document.createElement('p');
-    prompt.textContent = `Prompt: ${item.prompt?.text || 'Sem texto capturado'}`;
-    card.append(heading, prompt);
-    for (const answer of item.responses || []) {
-      const response = document.createElement('p');
-      response.textContent = `Resposta: ${answer.text || 'Sem texto capturado'}`;
-      card.append(response);
-    }
+    card.append(heading, contentBlock('Prompt', item.prompt?.text));
+    for (const [index, answer] of (item.responses || []).entries())
+      card.append(contentBlock(`Resposta ${index + 1}`, answer.text));
     target.append(card);
   }
   $('tv-content-status').textContent = `${result.items.length} interações recebidas nos últimos 2 dias.`;
