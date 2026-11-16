@@ -73,7 +73,9 @@ def begin_write(db: Any, *tables: str) -> None:
 
 
 def _create_employee_views(db: Any) -> None:
-    db.execute("""CREATE OR REPLACE VIEW employees AS
+    db.execute("DROP VIEW IF EXISTS machine_assignment_employees")
+    db.execute("DROP VIEW IF EXISTS employees")
+    db.execute("""CREATE VIEW employees AS
         SELECT employee.code AS employee_id, COALESCE(employee.display_name, employee.code) AS person_name,
                department.code AS department_code,
                CASE WHEN employee.disabled THEN 0 ELSE 1 END::SMALLINT AS active,
@@ -82,7 +84,7 @@ def _create_employee_views(db: Any) -> None:
         FROM public.employees AS employee
         JOIN public.departments AS department ON department.id = employee.department_id
         WHERE employee.role IN ('collaborator', 'auditor')""")
-    db.execute("""CREATE OR REPLACE VIEW machine_assignment_employees AS
+    db.execute("""CREATE VIEW machine_assignment_employees AS
         SELECT employee.code AS employee_id, COALESCE(employee.display_name, employee.code) AS person_name,
                department.code AS department_code,
                CASE WHEN employee.disabled THEN 0 ELSE 1 END::SMALLINT AS active,
