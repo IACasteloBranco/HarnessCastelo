@@ -106,12 +106,17 @@ def inspect(text: str, policy: Mapping[Category, Action], *, policy_version: str
     priority = {category: index for index, category in enumerate(_PATTERNS)}
     for category in Category:
         priority.setdefault(category, len(priority))
-    preserved = [item for item in findings if policy[item.category] == Action.ALLOW]
     selected = []
-    for item in sorted(findings, key=lambda item: (priority[item.category], item.start)):
-        if policy[item.category] == Action.MASK and not any(
-            item.start < other.end and other.start < item.end for other in (*preserved, *selected)
-        ):
+    preserved = [item for item in findings if policy[item.category] == Action.ALLOW]
+    masked = sorted((item for item in findings if policy[item.category] == Action.MASK),
+                    key=lambda item: (item.start, -(item.end - item.start), priority[item.category]))
+    for item in masked:
+        if any(other.start <= item.start and item.end <= other.end for other in preserved):
+            continue
+        if selected and item.start < selected[-1].end:
+            previous = selected[-1]
+            selected[-1] = Finding(previous.category, previous.start, max(previous.end, item.end))
+        else:
             selected.append(item)
     parts = []
     cursor = 0

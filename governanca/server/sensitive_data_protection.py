@@ -83,12 +83,15 @@ async def inspect_sensitive_data(text: str) -> tuple[Finding, ...]:
         raise InspectionUnavailable("Sensitive Data Protection inspection failed") from exc
 
     try:
+        inspection_result = response.result
+        if inspection_result.findings_truncated:
+            raise InspectionUnavailable("Sensitive Data Protection returned truncated findings")
         findings = []
-        for result in response.result.findings:
-            category = _INFO_TYPES.get(result.info_type.name)
+        for finding in inspection_result.findings:
+            category = _INFO_TYPES.get(finding.info_type.name)
             if category is None:
                 continue
-            location = result.location
+            location = finding.location
             ranges = location.codepoint_range if location else None
             if ranges is None:
                 raise InspectionUnavailable("Sensitive Data Protection returned no text range")
