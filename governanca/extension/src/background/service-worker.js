@@ -10,13 +10,17 @@ const PLATFORM_BY_ORIGIN = new Map([
   [CLAUDE_ORIGIN, 'claude_web']
 ]);
 const BLOCKER_PROTOCOL_VERSION = 1; // Bump only for incompatible blocker-message changes.
-const PRIVACY_NOTICE_VERSION = '2026-11-02.2';
+const PRIVACY_NOTICE_VERSION = '2026-11-16.1';
 const LOCAL_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 const policyPorts = new Set();
 const policyPortProtocols = new WeakMap();
 let localHistoryWrites = Promise.resolve();
 let renewal = null;
+let renewalToken = null;
 let lastRenewalAttempt = 0;
+let sessionGeneration = 0;
+let captureIntentGeneration = 0;
+let sessionStateWrites = Promise.resolve();
 const ready = (async () => {
   await chrome.storage.local.setAccessLevel({accessLevel: 'TRUSTED_CONTEXTS'});
   await chrome.storage.session.setAccessLevel({accessLevel: 'TRUSTED_CONTEXTS'});
@@ -28,6 +32,12 @@ const ready = (async () => {
 })();
 
 const hex = bytes => Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+function updateSessionState(update) {
+  const operation = sessionStateWrites.then(update);
+  sessionStateWrites = operation.catch(() => {});
+  return operation;
+}
+
 function cloudConfigured() {
   try {
     const url = new URL(API);
@@ -42,33 +52,60 @@ async function credentials() {
       authSession.expires_at * 1000 <= Date.now()) return null;
   if (authSession.expires_at * 1000 - Date.now() > 30 * 24 * 60 * 60 * 1000) return authSession;
   if (Date.now() - lastRenewalAttempt < 5 * 60 * 1000) return authSession;
-  if (!renewal) renewal = (async () => {
-    lastRenewalAttempt = Date.now();
-    const response = await fetch(`${API}/api/auth/extension/renew`, {
-      method: 'POST', headers: {Authorization: `Bearer ${authSession.access_token}`},
-      signal: AbortSignal.timeout(5_000)
+  if (!renewal || renewalToken !== authSession.access_token) {
+    const generation = sessionGeneration;
+    const accessToken = authSession.access_token;
+    const pending = (async () => {
+      lastRenewalAttempt = Date.now();
+      const response = await fetch(`${API}/api/auth/extension/renew`, {
+        method: 'POST', headers: {Authorization: `Bearer ${accessToken}`},
+        signal: AbortSignal.timeout(5_000)
+      });
+      if (response.status === 401) {
+        return updateSessionState(async () => {
+          const current = await chrome.storage.local.get('authSession');
+          if (generation !== sessionGeneration || current.authSession?.access_token !== accessToken) return null;
+          await chrome.storage.local.remove('authSession');
+          await chrome.storage.session.set({authProblem: 'Sessão revogada. Entre novamente.'});
+          return null;
+        });
+      }
+      if (!response.ok) return currentCredentials(generation, accessToken);
+      const {expires_at} = await response.json();
+      if (!Number.isSafeInteger(expires_at) || expires_at * 1000 <= Date.now())
+        return currentCredentials(generation, accessToken);
+      const updated = {...authSession, expires_at};
+      return updateSessionState(async () => {
+        const current = await chrome.storage.local.get('authSession');
+        if (generation !== sessionGeneration || current.authSession?.access_token !== accessToken) return null;
+        await chrome.storage.local.set({authSession: updated});
+        return updated;
+      });
+    })().catch(() => currentCredentials(generation, accessToken)).finally(() => {
+      if (renewal === pending) { renewal = null; renewalToken = null; }
     });
-    if (response.status === 401) {
-      await chrome.storage.local.remove('authSession');
-      await chrome.storage.session.set({authProblem: 'Sessão revogada. Entre novamente.'});
-      return null;
-    }
-    if (!response.ok) return authSession;
-    const {expires_at} = await response.json();
-    if (!Number.isSafeInteger(expires_at) || expires_at * 1000 <= Date.now()) return authSession;
-    const updated = {...authSession, expires_at};
-    await chrome.storage.local.set({authSession: updated});
-    return updated;
-  })().catch(() => authSession).finally(() => { renewal = null; });
+    renewal = pending;
+    renewalToken = accessToken;
+  }
   return renewal;
 }
 
+async function currentCredentials(generation, accessToken) {
+  if (generation !== sessionGeneration || !accessToken) return null;
+  const {authSession} = await chrome.storage.local.get('authSession');
+  return generation === sessionGeneration && authSession?.access_token === accessToken &&
+    Number.isSafeInteger(authSession.expires_at) && authSession.expires_at * 1000 > Date.now()
+    ? authSession : null;
+}
+
 async function captureReadiness() {
+  await credentials();
   const [{enabled, privacyAcceptance, authSession}, {machineAssignment}] = await Promise.all([
     chrome.storage.local.get(['enabled', 'privacyAcceptance', 'authSession']),
     chrome.storage.session.get(['machineAssignment'])]);
   const configured = cloudConfigured();
-  const authSessionValid = Boolean(await credentials()) && authSession?.must_change_password !== true;
+  const currentIdentity = await currentCredentials(sessionGeneration, authSession?.access_token);
+  const authSessionValid = Boolean(currentIdentity) && authSession?.must_change_password !== true;
   const keyMatches = machineAssignment?.key_matches === true;
   const subjectBound = machineAssignment?.employee_id === authSession?.employee_code;
   const machineAssignmentComplete = Boolean(machineAssignment?.person_name && machineAssignment?.employee_id &&
@@ -87,26 +124,36 @@ async function captureAllowed() {
   return (await captureReadiness()).capture_allowed;
 }
 
-async function closeSession(reason, revoke = true, disableCapture = false) {
+async function closeSession(reason, revoke = true, disableCapture = false, expectedAccessToken = null) {
+  const generation = expectedAccessToken ? sessionGeneration : ++sessionGeneration;
+  if (!expectedAccessToken) ++captureIntentGeneration;
   const {authSession} = await chrome.storage.local.get('authSession');
+  const closed = await updateSessionState(async () => {
+    const {authSession: current} = await chrome.storage.local.get('authSession');
+    if (expectedAccessToken && current?.access_token !== expectedAccessToken) return false;
+    if (generation !== sessionGeneration) return false;
+    await chrome.storage.local.remove('authSession');
+    await chrome.storage.session.remove(['machineAssignment', 'machineInfo']);
+    await chrome.storage.session.set({authProblem: reason});
+    if (disableCapture) await chrome.storage.local.set({enabled: false});
+    return true;
+  });
+  if (!closed) return sessionGeneration;
   if (revoke && authSession?.access_token) {
     await fetch(`${API}/api/auth/extension/logout`, {
       method: 'POST', headers: {Authorization: `Bearer ${authSession.access_token}`},
       signal: AbortSignal.timeout(5_000)
     }).catch(() => {});
   }
-  await chrome.storage.local.remove('authSession');
-  await chrome.storage.session.remove(['machineAssignment', 'machineInfo']);
-  await chrome.storage.session.set({authProblem: reason});
-  if (disableCapture) await chrome.storage.local.set({enabled: false});
   await broadcastPolicy();
-  await updateProbeConfig(false);
+  await updateProbeConfig(await captureAllowed());
+  return generation;
 }
 
 async function internalLogin(employee_code, password) {
   if (!cloudConfigured()) throw new Error('Configure a URL do servidor Harness.');
   const {authSession} = await chrome.storage.local.get('authSession');
-  await closeSession('Novo login iniciado.', false);
+  const generation = await closeSession('Novo login iniciado.', false);
   const response = await fetch(`${API}/api/auth/extension/login`, {method: 'POST', signal: AbortSignal.timeout(10_000),
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({employee_code, password})});
@@ -121,10 +168,25 @@ async function internalLogin(employee_code, password) {
   if (typeof data.access_token !== 'string' || data.access_token.length < 32 ||
       !Number.isSafeInteger(data.expires_at) || data.expires_at * 1000 <= Date.now() ||
       data.employee_code !== employee_code) throw new Error('Sessão inválida recebida do Harness.');
-  await chrome.storage.local.set({authSession: data});
-  if (authSession?.employee_code && authSession.employee_code !== data.employee_code)
-    await chrome.storage.local.set({enabled: false});
+  await updateSessionState(async () => {
+    if (generation !== sessionGeneration) throw new Error('Login cancelado porque a sessão foi alterada.');
+    await chrome.storage.local.set({authSession: data});
+    if (authSession?.employee_code && authSession.employee_code !== data.employee_code)
+      await chrome.storage.local.set({enabled: false});
+  });
   await chrome.storage.session.remove('authProblem');
+  try {
+    const machine = await registerAndLoadMachine();
+    const {privacyAcceptance} = await chrome.storage.local.get('privacyAcceptance');
+    if (machine.employee_id === data.employee_code && machine.department_code === data.department_code &&
+        machine.key_matches === true && privacyAcceptance?.version === PRIVACY_NOTICE_VERSION &&
+        privacyAcceptance.subject === data.employee_code && Number.isFinite(Date.parse(privacyAcceptance.accepted_at))) {
+      await setCaptureEnabled(true, ++captureIntentGeneration,
+        {generation: sessionGeneration, accessToken: data.access_token});
+    }
+  } catch (error) {
+    await chrome.storage.session.set({authProblem: `Login concluído; captura indisponível: ${error.message}`});
+  }
   await broadcastPolicy();
   return {employee_code: data.employee_code, expires_at: data.expires_at,
     must_change_password: data.must_change_password};
@@ -204,11 +266,17 @@ async function registerAndLoadMachine() {
   const {machinePublicKey} = await ensureMachineKey();
   const enrolled = await sendToApi('/v1/machines', {method: 'POST', body: JSON.stringify({installation_id: installationId,
     public_key: machinePublicKey})});
+  const {authSession} = await chrome.storage.local.get('authSession');
+  if (authSession?.employee_code) {
+    await sendToApi(`/v1/machines/${installationId}/assignment-request`, {
+      method: 'POST', body: JSON.stringify({employee_id: authSession.employee_code})});
+  }
   const machine = await loadMachineAssignment();
   return machine || {...enrolled, installation_id: installationId};
 }
 
 async function loadMachineAssignment() {
+  const generation = sessionGeneration;
   const {installationId} = await chrome.storage.local.get('installationId');
   const result = await sendToApi(`/v1/machines/${installationId}`);
   const {machinePublicKey} = await chrome.storage.local.get('machinePublicKey');
@@ -219,8 +287,11 @@ async function loadMachineAssignment() {
     typeof result.employee_id === 'string' && result.employee_id.trim() &&
     typeof result.department_code === 'string' && result.department_code.trim()
     ? {...result, key_matches: true, subject_bound: CLOUD} : null;
-  await chrome.storage.session.set({machineAssignment: assignment});
-  await chrome.storage.session.set({machineInfo: {...result, key_matches: fingerprint === result.key_fingerprint}});
+  await updateSessionState(async () => {
+    if (generation !== sessionGeneration) throw new Error('Sessão alterada durante a consulta da atribuição.');
+    await chrome.storage.session.set({machineAssignment: assignment,
+      machineInfo: {...result, key_matches: fingerprint === result.key_fingerprint}});
+  });
   return assignment ? {...result, key_matches: true} : {...result, key_matches: fingerprint === result.key_fingerprint};
 }
 
@@ -241,9 +312,12 @@ async function sendToApi(path, options = {}) {
   await ready;
   const {timeoutMs = 10_000, ...requestOptions} = options;
   if (CLOUD && !cloudConfigured()) throw new Error('Configure a URL do servidor Harness.');
+  const {authSession: requestedSession} = await chrome.storage.local.get('authSession');
   const identity = await credentials();
   if (CLOUD && !identity && path !== '/health') {
-    await closeSession('Sessão Harness ausente ou expirada. Entre novamente.');
+    if (requestedSession?.access_token)
+      await closeSession('Sessão Harness ausente ou expirada. Entre novamente.', true, false,
+        requestedSession.access_token);
     throw new Error('Sessão Harness ausente ou expirada. Entre novamente.');
   }
   const method = options.method || 'GET';
@@ -265,7 +339,8 @@ async function sendToApi(path, options = {}) {
     const session = await fetch(`${API}/api/auth/extension/me`, {
       headers: {Authorization: `Bearer ${identity.access_token}`}, signal: AbortSignal.timeout(5_000)
     }).catch(() => null);
-    if (session?.status === 401) await closeSession('Sessão Harness expirada. Entre novamente.');
+    if (session?.status === 401)
+      await closeSession('Sessão Harness expirada. Entre novamente.', true, false, identity.access_token);
   }
   if (!response.ok) throw new Error(`HTTP ${response.status}${data.detail ? `: ${data.detail}` : ''}`);
   return data;
@@ -298,9 +373,10 @@ async function status() {
   const config = await chrome.storage.local.get(['enabled', 'authSession']);
   const {installationId} = await chrome.storage.local.get('installationId');
   let identity = await credentials();
-  if (config.authSession && !identity) await closeSession('Sessão Harness expirada. Entre novamente.', false);
+  if (config.authSession && !identity)
+    await closeSession('Sessão Harness expirada. Entre novamente.', false, false, config.authSession.access_token);
   let {machineAssignment = null, machineInfo = null} = await chrome.storage.session.get(['machineAssignment', 'machineInfo']);
-  if (!identity) machineAssignment = null;
+  if (!identity) { machineAssignment = null; machineInfo = null; }
   if (identity) {
     try {
       const current = await loadMachineAssignment();
@@ -310,7 +386,8 @@ async function status() {
         ? {...current, subject_bound: true} : null;
     } catch {
       machineAssignment = null;
-      await chrome.storage.session.set({machineAssignment: null});
+      machineInfo = null;
+      await chrome.storage.session.set({machineAssignment: null, machineInfo: null});
       identity = await credentials();
     }
   }
@@ -320,8 +397,9 @@ async function status() {
     privacyAcceptance.subject === privacySubject && Number.isFinite(Date.parse(privacyAcceptance.accepted_at)));
   await broadcastPolicy();
   const {authProblem = null} = await chrome.storage.session.get('authProblem');
-  await updateProbeConfig((await captureReadiness()).capture_allowed);
-  return {enabled: config.enabled === true,
+  const readiness = await captureReadiness();
+  await updateProbeConfig(readiness.capture_allowed);
+  return {enabled: config.enabled === true, captureAllowed: readiness.capture_allowed,
     configured: cloudConfigured(), cloud: true, authenticated: Boolean(identity),
     employeeCode: identity?.employee_code || null, expiresAt: identity?.expires_at || null,
     authProblem, installationId, machineAssignment, machineInfo,
@@ -393,6 +471,33 @@ async function updateProbeConfig(enabled) {
   ));
 }
 
+async function setCaptureEnabled(enabled, intent = ++captureIntentGeneration, session = null) {
+  const saved = await updateSessionState(async () => {
+    if (intent !== captureIntentGeneration) return false;
+    if (enabled) {
+      const [{authSession, privacyAcceptance}, {machineAssignment}] = await Promise.all([
+        chrome.storage.local.get(['authSession', 'privacyAcceptance']),
+        chrome.storage.session.get('machineAssignment')]);
+      if (!session || session.generation !== sessionGeneration ||
+          !cloudConfigured() ||
+          authSession?.access_token !== session.accessToken || authSession?.must_change_password === true ||
+          authSession.expires_at * 1000 <= Date.now() ||
+          privacyAcceptance?.version !== PRIVACY_NOTICE_VERSION ||
+          privacyAcceptance.subject !== authSession.employee_code ||
+          !Number.isFinite(Date.parse(privacyAcceptance.accepted_at)) ||
+          machineAssignment?.employee_id !== authSession.employee_code ||
+          machineAssignment?.department_code !== authSession.department_code ||
+          machineAssignment?.key_matches !== true || !machineAssignment?.person_name) return false;
+    }
+    await chrome.storage.local.set({enabled});
+    return true;
+  });
+  if (!saved) return false;
+  await broadcastPolicy();
+  await updateProbeConfig(await captureAllowed());
+  return true;
+}
+
 chrome.runtime.onMessage.addListener((message, sender, reply) => {
   (async () => {
     await ready;
@@ -402,11 +507,18 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
 
     if (popup && message.type === 'status') return status();
     if (popup && message.type === 'delete_local_data') {
-      await chrome.storage.local.clear();
-      await chrome.storage.session.clear();
-      await chrome.storage.local.set({installationId: crypto.randomUUID()});
+      const generation = ++sessionGeneration;
+      ++captureIntentGeneration;
+      const deleted = await updateSessionState(async () => {
+        if (generation !== sessionGeneration) return false;
+        await chrome.storage.local.clear();
+        await chrome.storage.session.clear();
+        await chrome.storage.local.set({installationId: crypto.randomUUID()});
+        return true;
+      });
+      if (!deleted) throw new Error('Os dados não foram removidos porque a sessão mudou. Tente novamente.');
       await broadcastPolicy();
-      await updateProbeConfig(false);
+      await updateProbeConfig(await captureAllowed());
       return {deleted: true};
     }
     if (popup && message.type === 'accept_privacy_notice') {
@@ -414,13 +526,25 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       const {authSession} = await chrome.storage.local.get('authSession');
       const subject = authSession?.employee_code;
       if (!subject) throw new Error('Entre na conta corporativa e conclua a atribuição antes de confirmar ciência.');
+      const intent = ++captureIntentGeneration;
       const {privacyAcceptance} = await chrome.storage.local.get('privacyAcceptance');
       if (privacyAcceptance?.version !== PRIVACY_NOTICE_VERSION || privacyAcceptance.subject !== subject ||
           !Number.isFinite(Date.parse(privacyAcceptance.accepted_at))) {
-        await chrome.storage.local.set({privacyAcceptance: {
-          version: PRIVACY_NOTICE_VERSION, subject, accepted_at: new Date().toISOString()
-        }, enabled: false});
+        await updateSessionState(async () => {
+          const current = await chrome.storage.local.get('authSession');
+          if (intent !== captureIntentGeneration || current.authSession?.access_token !== authSession.access_token)
+            throw new Error('A sessão mudou. Confira a conta e tente novamente.');
+          await chrome.storage.local.set({privacyAcceptance: {
+            version: PRIVACY_NOTICE_VERSION, subject, accepted_at: new Date().toISOString()
+          }, enabled: false});
+        });
       }
+      const machine = await registerAndLoadMachine();
+      if (machine.employee_id !== subject || machine.department_code !== authSession.department_code ||
+          machine.key_matches !== true) throw new Error('Não foi possível vincular esta instalação à sua conta.');
+      if (!await setCaptureEnabled(true, intent,
+          {generation: sessionGeneration, accessToken: authSession.access_token}))
+        throw new Error('A sessão mudou antes de ativar a captura. Entre novamente.');
       return {accepted: true};
     }
     if (popup && message.type === 'login') {
@@ -439,41 +563,36 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       return {signedOut: true};
     }
     if (popup && message.type === 'save') {
-      if (!await credentials()) throw new Error('Entre no Harness antes de ativar a captura.');
       const enableCapture = message.enabled === true;
-      if (enableCapture) {
-        if (!(await captureReadiness()).privacy_notice_accepted)
-          throw new Error('Leia e confirme ciência do aviso de privacidade antes de ativar a captura.');
+      const intent = ++captureIntentGeneration;
+      if (!enableCapture) {
+        await setCaptureEnabled(false, intent);
+        return {saved: true};
+      }
+      const identity = await credentials();
+      if (!identity) throw new Error('Entre no Harness antes de ativar a captura.');
+      const session = {generation: sessionGeneration, accessToken: identity.access_token};
+      if (!(await captureReadiness()).privacy_notice_accepted)
+        throw new Error('Leia e confirme ciência do aviso de privacidade antes de ativar a captura.');
+      try {
         const assignment = await registerAndLoadMachine();
-        if (!assignment.person_name || !assignment.employee_id || !assignment.department_code || assignment.key_matches !== true) {
-          await chrome.storage.local.set({enabled: false});
-          await updateProbeConfig(false);
+        if (!assignment.person_name || assignment.employee_id !== identity.employee_code ||
+            assignment.department_code !== identity.department_code || assignment.key_matches !== true) {
           const missing = [
             !assignment.person_name && 'nome do colaborador',
-            !assignment.employee_id && 'ID do colaborador',
-            !assignment.department_code && 'código do departamento',
+            assignment.employee_id !== identity.employee_code && 'vínculo com o colaborador autenticado',
+            assignment.department_code !== identity.department_code && 'vínculo com o departamento autenticado',
             assignment.key_matches !== true && 'conferência da chave da instalação'
           ].filter(Boolean).join(', ');
           throw new Error(`Captura pausada: falta atribuir ${missing}. Peça ao operador para completar a atribuição no backend.`);
         }
+      } catch (error) {
+        await setCaptureEnabled(false, intent);
+        throw error;
       }
-      await chrome.storage.local.set({enabled: enableCapture});
-      await broadcastPolicy();
-      await updateProbeConfig(enableCapture);
+      if (!await setCaptureEnabled(true, intent, session))
+        throw new Error('A sessão ou a configuração mudou durante a ativação. Confira o estado e tente novamente.');
       return {saved: true};
-    }    if (popup && message.type === 'machine_register') {
-      const assignment = await registerAndLoadMachine();
-      await broadcastPolicy();
-      return assignment;
-    }
-    if (popup && message.type === 'machine_assignment_request') {
-      const employeeId = typeof message.employeeId === 'string' ? message.employeeId.trim() : '';
-      if (!employeeId || employeeId.length > 128 || /[\u0000-\u001f\u007f]/.test(employeeId)) throw new Error('Informe um código de colaborador válido.');
-      const machine = await registerAndLoadMachine();
-      if (machine.person_name) throw new Error('Esta instalação já está atribuída.');
-      const {installationId} = await chrome.storage.local.get('installationId');
-      return sendToApi(`/v1/machines/${installationId}/assignment-request`, {
-        method: 'POST', body: JSON.stringify({employee_id: employeeId})});
     }
     if (popup && message.type === 'health') return sendToApi('/health');
 

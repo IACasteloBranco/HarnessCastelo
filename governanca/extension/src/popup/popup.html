@@ -16,9 +16,9 @@
 
     <section id="privacy-notice" class="card privacy-notice" aria-labelledby="privacy-title">
       <h2 id="privacy-title">Aviso de privacidade antes da captura — versão <span id="privacy-version"></span></h2>
-      <p>Uso interno obrigatório para colaboradores no Brasil. Antes de enviar conversas, a empresa orienta anonimizar dados de clientes e terceiros. A extensão registra prompts e respostas observados no ChatGPT e no Claude, horários, instalação, colaborador, departamento, contexto da conversa, IP de origem e metadados de anexos. Diagnósticos locais podem incluir resultados e códigos das regras da política. Não envia bytes dos arquivos nem cookies ou cabeçalhos de autenticação dos provedores.</p>
-      <p>A Castelo Branco usa os registros para administrar a extensão, verificar falhas, acompanhar as políticas internas e investigar suspeitas declaradas de infrações graves. Auditores consultam indicadores departamentais agregados. A Governança consulta metadados associados ao código do colaborador e ao departamento.</p>
-      <p>A leitura ou exportação de conteúdo bruto exige finalidade declarada, indicação de quem terá acesso e aprovação de outro responsável da Governança. Cada autorização vale por uma hora e para um colaborador. O acesso fica registrado e não gera decisão disciplinar automática. A ciência deste aviso não é consentimento nem, por si só, base legal do tratamento.</p>
+      <p>Uso interno obrigatório para colaboradores no Brasil. Entre com sua conta corporativa; a extensão vincula esta instalação à conta autenticada. Depois da ciência deste aviso, a captura inicia automaticamente e pode ser pausada no popup. Antes de enviar conversas, a empresa orienta anonimizar dados de clientes e terceiros. A extensão registra prompts e respostas observados no ChatGPT e no Claude, horários, instalação, colaborador, departamento, contexto da conversa, IP de origem e metadados de anexos. Diagnósticos locais podem incluir resultados e códigos das regras da política. Não envia bytes dos arquivos nem cookies ou cabeçalhos de autenticação dos provedores.</p>
+      <p>A Castelo Branco usa os registros para administrar a extensão, verificar falhas, acompanhar as políticas internas e investigar suspeitas declaradas de infrações graves. Auditores consultam indicadores departamentais agregados. A Governança consulta metadados associados ao código do colaborador e ao departamento. As contas dos colaboradores são criadas pela Governança com uma senha temporária, que deve ser trocada no primeiro acesso.</p>
+      <p>A leitura ou exportação de conteúdo bruto de uma pessoa é solicitada por botão na plataforma da Governança após selecionar o colaborador. A liberação é automática para quem solicitou, sem justificativa no sistema e sem aprovação de outra pessoa, vale por uma hora e fica registrada para auditoria. A exportação pode incluir todas as interações disponíveis daquele colaborador. No modo TV, após a autenticação da Governança, o painel exibe automaticamente prompts e respostas de todos os colaboradores dos últimos dois dias e atualiza a cada 30 minutos. Cada consulta é registrada; o prazo de dois dias limita a exibição e não altera a retenção dos registros. A ciência deste aviso não é consentimento nem, por si só, base legal do tratamento.</p>
       <p>Os registros ficam na máquina virtual da Google Cloud em São Paulo por até 90 dias. Um backup criptografado de todo o banco é enviado automaticamente ao Google Drive corporativo, onde o acesso fica restrito ao responsável pela Governança. Os backups também ficam retidos por até 90 dias e os arquivos vencidos serão excluídos. Dúvidas ou pedidos: +55 75 9864-6173.</p>
       <label id="privacy-ack-label" class="check" for="privacy-ack"><input id="privacy-ack" type="checkbox"> Confirmo que recebi e li este aviso.</label>
       <button id="accept-privacy" type="button" disabled>Registrar ciência</button>
@@ -38,22 +38,10 @@
       </div>
     </section>
 
-    <section class="card identity-card" aria-labelledby="identity-title">
-      <div class="section-heading"><span class="step">01</span><div><h2 id="identity-title">Esta instalação</h2><p>Identificação e vínculo do equipamento</p></div></div>
-      <pre id="identity">Carregando…</pre>
-      <button id="register-machine" class="button-secondary" type="button">Atualizar identificação</button>
-    </section>
-
-    <form id="assignment-request" class="card request-card">
-      <div class="section-heading"><span class="step gold">02</span><div><h2>Solicitar vínculo</h2><p>Envie seu código para aprovação</p></div></div>
-      <label for="employee-id">Código do colaborador<input id="employee-id" type="text" autocomplete="off" maxlength="128" required placeholder="Ex.: CB-1234"></label>
-      <button type="submit">Enviar solicitação <span aria-hidden="true">→</span></button>
-      <p class="helper">A captura só será liberada depois que o operador aprovar o pedido.</p>
-    </form>
-
     <form id="config" class="card config-card">
-      <div class="section-heading"><span class="step">03</span><div><h2>Captura</h2><p>Ativação protegida pelo vínculo aprovado</p></div></div>
+      <div class="section-heading"><span class="step">01</span><div><h2>Captura</h2><p>Ativação vinculada à sua conta</p></div></div>
       <label class="check" for="enabled"><input id="enabled" type="checkbox" disabled> Ativar captura</label>
+      <p id="capture-readiness" class="helper" role="status" aria-live="polite"></p>
       <button type="submit">Salvar configuração</button>
     </form>
 

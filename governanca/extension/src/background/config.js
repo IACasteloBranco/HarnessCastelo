@@ -1,3 +1,3 @@
 export const CONFIG = {
-  apiUrl: 'http://127.0.0.1:18081'
+  apiUrl: 'https://governanca.castelotecnologia.com.br'
 };

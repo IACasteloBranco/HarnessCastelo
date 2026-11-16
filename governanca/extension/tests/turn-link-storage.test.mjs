@@ -15,7 +15,7 @@ const promptHash = 'a'.repeat(64);
 
 function captureReadyData() {
   return {installationId: '00000000-0000-4000-8000-000000000098', enabled: true,
-    privacyAcceptance: {version: '2026-11-02.2', subject: 'SYN-1', accepted_at: new Date().toISOString()},
+    privacyAcceptance: {version: '2026-11-16.1', subject: 'SYN-1', accepted_at: new Date().toISOString()},
     authSession: {access_token: 'synthetic-access-token', employee_code: 'SYN-1',
       expires_at: Math.floor(Date.now() / 1000) + 3600},
     machineAssignment: {person_name: 'Pessoa Sintética', employee_id: 'SYN-1',
@@ -31,7 +31,7 @@ function worker({localData = {}, fetchImpl = async () => {throw new Error('unexp
       return Object.fromEntries((Array.isArray(keys) ? keys : Object.keys(local)).map(key => [key, local[key]]));
     },
     async set(values) { Object.assign(local, values); },
-    async remove(keys) { for (const key of keys) delete local[key]; },
+    async remove(keys) { for (const key of typeof keys === 'string' ? [keys] : keys) delete local[key]; },
     async setAccessLevel() {}
   };
   const chrome = {storage: {local: storage, session: storage},
@@ -94,7 +94,7 @@ test('stores the first ChatGPT prompt while its conversation URL is unknown', as
   let submitted;
   const {send} = worker({localData: {
     installationId: '00000000-0000-4000-8000-000000000098', enabled: true,
-    privacyAcceptance: {version: '2026-11-02.2', subject: 'SYN-1', accepted_at: new Date().toISOString()},
+    privacyAcceptance: {version: '2026-11-16.1', subject: 'SYN-1', accepted_at: new Date().toISOString()},
     authSession: {access_token: 'synthetic-access-token', employee_code: 'SYN-1',
       expires_at: Math.floor(Date.now() / 1000) + 3600},
     machineAssignment: {person_name: 'Pessoa Sintética', employee_id: 'SYN-1',
@@ -192,6 +192,77 @@ test('reports each capture readiness requirement without exposing credentials', 
   assert.equal(decision.auth_session_valid, true);
   assert.equal(decision.machine_assignment_complete, true);
   assert.equal(decision.capture_allowed, false);
+});
+
+test('reports capture readiness when no extension session is stored', async () => {
+  const {send} = worker({localData: {enabled: true}});
+  const result = await send({type: 'status'},
+    {url: 'chrome-extension://test/src/popup/popup.html'});
+
+  assert.equal(result.ok, true, result.error);
+  assert.equal(result.data.authenticated, false);
+  assert.equal(result.data.captureAllowed, false);
+});
+
+test('rejects capture actions cleanly when nobody is logged in', async () => {
+  const {send, local} = worker({localData: {enabled: false}});
+  const popup = {url: 'chrome-extension://test/src/popup/popup.html'};
+  for (const message of [
+    {type: 'save', enabled: true},
+    {type: 'accept_privacy_notice', version: '2026-11-16.1'}
+  ]) {
+    const result = await send(message, popup);
+    assert.equal(result.ok, false);
+    assert.match(result.error, /entre|sessão/i);
+    assert.doesNotMatch(result.error, /Cannot read properties|undefined/);
+  }
+  assert.equal(local.enabled, false);
+});
+
+test('returns a useful error after a failed login request', async () => {
+  const {send, local} = worker({fetchImpl: async () => { throw new Error('network offline'); }});
+  const popup = {url: 'chrome-extension://test/src/popup/popup.html'};
+  const login = await send({type: 'login', employeeCode: 'SYN-1', password: 'synthetic'}, popup);
+  assert.equal(login.ok, false);
+  assert.match(login.error, /network offline/);
+  const status = await send({type: 'status'}, popup);
+  assert.equal(status.ok, true, status.error);
+  assert.equal(status.data.authenticated, false);
+  assert.equal(local.authSession, undefined);
+});
+
+test('keeps the popup usable with an expired or malformed stored session', async () => {
+  for (const authSession of [
+    {access_token: 'expired-token', expires_at: 1},
+    {access_token: 'malformed-token', expires_at: 'invalid'}
+  ]) {
+    const {send, local} = worker({localData: {enabled: true, authSession}});
+    const result = await send({type: 'status'},
+      {url: 'chrome-extension://test/src/popup/popup.html'});
+    assert.equal(result.ok, true, result.error);
+    assert.equal(result.data.authenticated, false);
+    assert.equal(result.data.captureAllowed, false);
+    assert.equal(local.authSession, undefined);
+  }
+});
+
+test('keeps the popup usable when renewal is revoked or the backend is offline', async () => {
+  for (const response of [
+    {status: 401},
+    null
+  ]) {
+    const data = captureReadyData();
+    const {send, local} = worker({localData: data, fetchImpl: async () => {
+      if (response) return response;
+      throw new Error('backend offline');
+    }});
+    const result = await send({type: 'status'},
+      {url: 'chrome-extension://test/src/popup/popup.html'});
+    assert.equal(result.ok, true, result.error);
+    assert.equal(result.data.captureAllowed, false);
+    assert.equal(result.data.authenticated, !response);
+    assert.equal(local.authSession === undefined, Boolean(response));
+  }
 });
 
 test('renews an active extension session without turning capture off', async () => {

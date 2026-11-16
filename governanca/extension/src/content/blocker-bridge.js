@@ -125,7 +125,7 @@
       cancel.style.cssText = 'min-height:44px;padding:9px 14px;border:1px solid #cbd3d8;border-radius:8px;background:#fff;color:#183248;font:600 14px "Segoe UI",Arial,sans-serif;cursor:pointer';
       const confirm = document.createElement('button');
       confirm.className = 'governanca-mask-confirm';
-      confirm.type = 'button'; confirm.textContent = 'Enviar texto mascarado';
+      confirm.type = 'button'; confirm.textContent = 'Aplicar máscara ao rascunho';
       confirm.style.cssText = 'min-height:44px;padding:9px 16px;border:1px solid #102f4a;border-radius:8px;background:#102f4a;color:#fff;font:700 14px "Segoe UI",Arial,sans-serif;cursor:pointer';
       actions.append(cancel, confirm); dialog.append(title, detail, preview, actions);
       const finish = approved => { dialog.close(); dialog.remove(); resolve(approved); };
@@ -194,18 +194,32 @@
     event.stopImmediatePropagation();
   }
   function inspect(event, method, textOverride, turnKey, retryMenuItem) {
-    const text = (textOverride ?? editorText(editor())).trim();
+    const inspectedRoute = location.href.split('#')[0];
+    const inspectedText = textOverride ?? editorText(editor());
+    const text = inspectedText.trim();
     const fileRoot = platform?.fileRoot?.() || platform?.composer() || editor()?.closest?.('form');
     const attachments = method === 'regenerate' ? null : globalThis.GovernancaFiles?.observe(fileRoot);
+    const attachmentsChanged = () => method !== 'regenerate' &&
+      JSON.stringify(globalThis.GovernancaFiles?.observe(
+        platform?.fileRoot?.() || platform?.composer() || editor()?.closest?.('form'))) !== JSON.stringify(attachments);
     if ((!replayingPrompt || replayingPrompt.text !== text || Date.now() - replayingPrompt.at >= 5000) && text) {
       stop(event);
       if (inspectionPending) return;
       inspectionPending = true;
-      chrome.runtime.sendMessage({type: 'inspect_sensitive_text', text: textOverride ?? editorText(editor())})
+      chrome.runtime.sendMessage({type: 'inspect_sensitive_text', text: inspectedText})
         .then(async response => {
+          if (response?.error === 'Captura ou atribuição indisponível.') {
+            showNotice('Envio bloqueado: a captura está pausada ou esta instalação não está atribuída à sua conta. Confira o login e o vínculo.', true);
+            return;
+          }
           const result = response?.ok ? response.data : null;
           if (result?.action === 'block') {
             showNotice('Envio bloqueado pela política de proteção de dados.', true);
+            return;
+          }
+          if (location.href.split('#')[0] !== inspectedRoute ||
+              (method !== 'regenerate' && (editorText(editor()) !== inspectedText || attachmentsChanged()))) {
+            showNotice('A conversa, o rascunho ou os anexos mudaram durante a inspeção. Envie novamente para revisar o conteúdo atualizado.', true);
             return;
           }
           if (result?.action === 'mask') {
@@ -213,24 +227,28 @@
               showNotice('Este turno contém dados que precisam ser mascarados. Reenvie o texto pelo compositor para revisar a prévia.', true);
               return;
             }
-            if (editorText(editor()).trim() !== text) {
-              showNotice('O rascunho mudou durante a inspeção. Envie novamente para revisar o texto atualizado.', true);
-              return;
-            }
             if (!await confirmMaskedText(result.text, result.categories)) return;
             const field = editor();
-            if (editorText(field).trim() !== text || !replaceEditorText(field, result.text)) {
+            if (location.href.split('#')[0] !== inspectedRoute || editorText(field) !== inspectedText ||
+                attachmentsChanged() || !replaceEditorText(field, result.text)) {
               showNotice('Não foi possível atualizar o compositor com o texto mascarado. Revise e tente novamente.', true);
               return;
             }
+            if (editorText(editor()) !== result.text) {
+              showNotice('O compositor mudou após a substituição. Revise o texto mascarado antes de enviar novamente.', true);
+              return;
+            }
+            resetGrant();
+            showNotice('Texto mascarado aplicado ao rascunho. Revise e clique em Enviar quando quiser continuar.');
+            return;
           } else if (result?.action !== 'allow') {
             showNotice('Inspeção indisponível. O envio foi bloqueado; tente novamente.', true);
             return;
           }
-          const replay = {text: editorText(editor()).trim(), at: Date.now()};
+          const replayText = result?.action === 'mask' ? result.text : inspectedText;
+          const replay = {text: replayText.trim(), at: Date.now()};
           replayingPrompt = replay;
           if (method === 'regenerate') {
-            replay.text = text;
             inspect({preventDefault() {}, stopImmediatePropagation() {}}, method, text, turnKey, retryMenuItem);
             Promise.resolve().then(() => { if (replayingPrompt === replay) replayingPrompt = null; });
             return;
@@ -264,7 +282,7 @@
     if (method === 'regenerate') {
       stop(event);
       Promise.resolve(globalThis.GovernancaCaptureRegeneration?.(text, turnKey)).then(ready => {
-        if (ready !== true || !retryMenuItem?.isConnected) {
+        if (ready !== true || location.href.split('#')[0] !== inspectedRoute || !retryMenuItem?.isConnected) {
           resetGrant();
           showNotice('Regeneração indisponível para este turno. Envie o prompt novamente no editor.', true);
           return;
@@ -369,7 +387,7 @@
         ? event.data.reason : 'missing';
       chrome.runtime.sendMessage({type: 'prompt_blocked', method: 'network', reason}).catch(() => {});
       if (reason === 'backend_unavailable') {
-        showNotice('Envio impedido: o backend de governança não respondeu. O prompt continua no compositor; tente novamente quando o serviço voltar.', true);
+        showNotice('Envio impedido: o backend de governança não respondeu. Revise o rascunho e tente novamente quando o serviço voltar.', true);
         return;
       }
       if (reason === 'capture_unavailable') {
@@ -389,7 +407,7 @@
           showNotice(messages.describe(decision), true);
           return;
         }
-        showNotice(`${messages.describe(decision)} O prompt continua no compositor; revise e use Enviar.`);
+        showNotice(`${messages.describe(decision)} Revise o rascunho e use Enviar novamente.`);
         return;
       }
       showNotice(reason === 'expired' ? 'Envio impedido: o tempo para processar o anexo expirou. Tente enviar novamente.'
