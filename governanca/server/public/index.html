@@ -5,8 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; base-uri 'none'; object-src 'none'; form-action 'self'">
   <title>Governança de IA</title>
-  <link rel="stylesheet" href="./portal.css?v=20261116-content-tv">
-  <script defer src="./app.js?v=20261116-content-tv"></script>
+  <link rel="stylesheet" href="./portal.css?v=20261116-markdown">
+  <script defer src="./markdown-it.min.js?v=20261116-markdown"></script>
+  <script defer src="./app.js?v=20261116-markdown"></script>
 </head>
 <body>
   <header>
@@ -54,17 +55,17 @@
           <button>Buscar</button>
         </form>
         <p id="interaction-count"></p><ul id="interactions"></ul>
+        <h4>Conteúdo da interação selecionada</h4><div id="detail" class="interaction-detail" aria-live="polite"></div>
       </section>
       <section aria-labelledby="investigations-title">
         <h3 id="investigations-title">Acesso a interações</h3>
-        <p>Selecione o colaborador e solicite o acesso pelo botão. A liberação é automática por uma hora e fica registrada para auditoria.</p>
+        <p>Selecione o colaborador e solicite o acesso pelo botão. A liberação é automática por uma hora e fica registrada para auditoria. Depois, clique em “Ver detalhe” na interação para consultar o prompt e as respostas.</p>
         <form id="investigation-form">
           <label>Código do colaborador <input id="investigation-employee-code" required maxlength="128"></label>
           <button>Solicitar acesso ao conteúdo</button>
         </form>
         <p id="active-case"></p><ul id="investigations"></ul>
         <button id="export-interactions" type="button" hidden>Exportar todas as interações do colaborador</button>
-        <h4>Conteúdo da interação</h4><div id="detail"></div>
       </section>
       <section aria-labelledby="accounts-title">
         <h3 id="accounts-title">Criar colaborador</h3>
