@@ -8,7 +8,7 @@ import re
 from urllib.parse import urlsplit
 
 
-PUBLIC = Path(__file__).resolve().parent.parent / "frontend" / "public"
+PUBLIC = Path(__file__).resolve().parent.parent / "maximus" / "frontend" / "public"
 ALLOWED = {"/privacidade.html", "/privacy.css", "/castelo-footer-logo.png"}
 API_ROUTES = {
     ("GET", "/healthz"),
