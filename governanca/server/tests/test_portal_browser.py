@@ -16,8 +16,8 @@ PUBLIC = Path(__file__).resolve().parents[1] / "public"
 
 class PortalFiles(SimpleHTTPRequestHandler):
     def do_GET(self):
-        if self.path == "/change-password":
-            self.path = "/index.html"
+        if self.path == "/first-login":
+            self.path = "/first-login.html"
         return super().do_GET()
 
     def log_message(self, format, *args):
@@ -38,41 +38,27 @@ class PortalBrowserTest(unittest.TestCase):
         cls.server.server_close()
         cls.thread.join()
 
-    def test_temporary_password_cannot_open_analytics(self):
+    def test_first_login_changes_password_without_opening_analytics(self):
         logged_in = False
-        forced_change = True
         requests = []
 
         def api(route):
-            nonlocal logged_in, forced_change
-            request = route.request
-            pathname = request.url.split("/api/", 1)[1]
+            nonlocal logged_in
+            pathname = route.request.url.split("/api/", 1)[1]
             requests.append(pathname)
-            status = 200
-            if pathname == "auth/me":
-                if logged_in:
-                    payload = {"role": "governance", "must_change_password": forced_change}
-                else:
-                    status, payload = 401, {"detail": "authentication required"}
-            elif pathname == "auth/login":
+            if pathname == "auth/login":
                 logged_in = True
                 payload = {"must_change_password": True}
             elif pathname == "auth/change-password":
-                forced_change = False
+                self.assertTrue(logged_in)
                 payload = {"must_change_password": False}
-            elif pathname.endswith("analytics/summary"):
-                payload = {"totals": {"interactions": 1, "responses": 1}}
-            elif pathname.endswith("analytics/departments"):
-                payload = {"departments": []}
-            elif pathname.endswith("analytics/interactions"):
-                payload = {"items": [], "total": 0}
-            elif pathname == "governance/investigations":
-                payload = {"investigations": []}
-            elif pathname == "auth/governance/departments":
-                payload = {"departments": [{"code": "FIN", "name": "Financeiro"}]}
+            elif pathname == "auth/logout":
+                logged_in = False
+                route.fulfill(status=204)
+                return
             else:
                 raise AssertionError(f"Unexpected API path: {pathname}")
-            route.fulfill(status=status, content_type="application/json", body=json.dumps(payload))
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(payload))
 
         assert sync_playwright is not None
         with sync_playwright() as playwright:
@@ -80,26 +66,18 @@ class PortalBrowserTest(unittest.TestCase):
             try:
                 page = browser.new_page()
                 page.route("**/api/**", api)
-                page.goto(f"http://127.0.0.1:{self.server.server_port}/")
-                page.locator("#employee-code").fill("GOV001")
+                page.goto(f"http://127.0.0.1:{self.server.server_port}/first-login")
+                page.locator("#employee-code").fill("EMP001")
                 page.locator("#password").fill("temporary")
                 page.locator("#login-form button").click()
-                page.locator("#change-screen").wait_for(state="visible")
-                self.assertTrue(page.url.endswith("/change-password"))
-                self.assertTrue(page.locator("#portal-screen").is_hidden())
-                self.assertFalse(any("analytics/" in path for path in requests))
-                page.reload()
-                page.locator("#change-screen").wait_for(state="visible")
-                self.assertFalse(any("analytics/" in path for path in requests))
+                page.locator("#change-form").wait_for(state="visible")
                 page.locator("#current-password").fill("temporary")
                 page.locator("#new-password").fill("long-new-password")
+                page.locator("#confirm-password").fill("long-new-password")
                 page.locator("#change-form button").click()
-                page.locator("#portal-screen").wait_for(state="visible")
-                page.locator("#summary").get_by_text("Interações: 1", exact=False).wait_for()
-                page.locator("#account-form").wait_for(state="visible")
-                self.assertEqual(page.get_by_text("Aprovações de máquinas").count(), 0)
-                self.assertTrue(page.url.endswith("/"))
-                self.assertTrue(any("analytics/summary" in path for path in requests))
+                page.locator("#success").wait_for(state="visible")
+                page.locator("#governance-link").wait_for(state="visible")
+                self.assertEqual(requests, ["auth/login", "auth/change-password", "auth/logout"])
             finally:
                 browser.close()
 

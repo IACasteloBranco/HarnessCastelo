@@ -15,9 +15,9 @@ function contentBlock(label, text) {
 }
 const requestedTv = location.pathname === '/tv';
 const show = screen => {
-  for (const id of ['login', 'change', 'portal', 'tv']) $(`${id}-screen`).hidden = id !== screen;
+  for (const id of ['login', 'portal', 'tv']) $(`${id}-screen`).hidden = id !== screen;
   document.body.classList.toggle('tv-mode', screen === 'tv');
-  const path = screen === 'change' ? '/change-password' : screen === 'tv' ? '/tv' : '/';
+  const path = screen === 'tv' ? '/tv' : '/';
   if (location.pathname !== path) history.replaceState(null, '', path);
 };
 async function api(url, options = {}) {
@@ -282,7 +282,7 @@ async function interactions() {
 async function session() {
   try {
     const me = await api('/api/auth/me');
-    if (me.must_change_password) show('change');
+    if (me.must_change_password) location.replace('https://primeiro-login.castelotecnologia.com.br/');
     else if (me.role === 'governance') {
       if (requestedTv || location.pathname === '/tv') {
         show('tv');
@@ -308,7 +308,7 @@ $('login-form').addEventListener('submit', async event => {
       employee_code: $('employee-code').value.trim(), password: $('password').value,
     }) });
     $('password').value = '';
-    if (result.must_change_password) show('change');
+    if (result.must_change_password) location.replace('https://primeiro-login.castelotecnologia.com.br/');
     else await session();
   } catch (error) { errorMessage(error); }
 });
@@ -372,18 +372,7 @@ $('copy-temporary-password').addEventListener('click', async () => {
     $('account-result').textContent = 'Senha temporária copiada. Ela será exigida no primeiro acesso.';
   } catch (error) { errorMessage(error); }
 });
-$('change-form').addEventListener('submit', async event => {
-  event.preventDefault();
-  try {
-    await api('/api/auth/change-password', { method: 'POST', body: JSON.stringify({
-      current_password: $('current-password').value,
-      new_password: $('new-password').value,
-    }) });
-    $('current-password').value = '';
-    $('new-password').value = '';
-    await session();
-  } catch (error) { errorMessage(error); }
-});
+
 $('logout').addEventListener('click', async () => {
   try {
     await api('/api/auth/logout', { method: 'POST' });

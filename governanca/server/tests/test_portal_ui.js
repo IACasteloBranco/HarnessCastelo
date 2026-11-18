@@ -19,7 +19,7 @@ function element() {
 async function portal(responses, pathname = '/') {
   const ids = {};
   const calls = [];
-  const location = { pathname };
+  const location = { pathname, replace(url) { this.href = url; } };
   const history = { replaceState(_state, _title, url) { location.pathname = url; } };
   const document = {
     body: { classList: { toggle() {} } },
@@ -45,39 +45,20 @@ async function portal(responses, pathname = '/') {
   return { ids, calls, location, el: id => document.getElementById(id) };
 }
 
-test('first-login password change is a dedicated gate before any analytics', async () => {
+test('governance portal redirects temporary-password sessions to the dedicated host', async () => {
   const p = await portal({ '/api/auth/me': { status: 401, body: { detail: 'authentication required' } },
     '/api/auth/login': { must_change_password: true } });
   p.el('employee-code').value = 'GOV001';
   p.el('password').value = 'temporary';
   await p.el('login-form').fire('submit');
-  assert.equal(p.el('change-screen').hidden, false);
   assert.equal(p.el('portal-screen').hidden, true);
-  assert.equal(p.location.pathname, '/change-password');
+  assert.equal(p.location.href, 'https://primeiro-login.castelotecnologia.com.br/');
   assert.deepEqual(p.calls.map(call => call.url), ['/api/auth/me', '/api/auth/login']);
 });
 
-test('password change unlocks portal only after server confirms it', async () => {
-  let changed = false;
-  const p = await portal({
-    '/api/auth/me': () => ({ must_change_password: !changed, role: 'governance' }),
-    '/api/auth/change-password': () => { changed = true; return { must_change_password: false }; },
-    '/api/capture/v1/admin/analytics/summary': { totals: { interactions: 2 }, by_department: [] },
-    '/api/capture/v1/admin/analytics/departments': { departments: [] },
-    '/api/capture/v1/admin/analytics/interactions': { items: [], total: 0 },
-    '/api/governance/investigations': { investigations: [] },
-    '/api/capture/v1/admin/machines/assignment-requests': { items: [] },
-  });
-  assert.equal(p.el('change-screen').hidden, false);
-  assert.deepEqual(p.calls.map(call => call.url), ['/api/auth/me']);
-  p.el('current-password').value = 'temporary';
-  p.el('new-password').value = 'long-new-password';
-  await p.el('change-form').fire('submit');
-  assert.equal(p.el('change-screen').hidden, true);
-  assert.equal(p.el('portal-screen').hidden, false);
-  assert.equal(p.location.pathname, '/');
-  assert.equal(p.calls[1].url, '/api/auth/change-password');
-  assert.equal(JSON.parse(p.calls[1].options.body).current_password, 'temporary');
+test('governance document no longer contains the password-change form', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+  assert.doesNotMatch(html, /id="change-form"|Senha temporária|Troca obrigatória/);
 });
 
 test('analytics renders only metadata as text and filters interactions', async () => {
@@ -185,20 +166,55 @@ test('TV dashboard loads prompts and responses with employee and department', as
   assert.doesNotMatch(html, /tv-request-content|Solicitar exibição/);
 });
 
-test('standalone document has dedicated password gate and privacy notice', () => {
+test('first-login document owns the password-change forms and links back to governance', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
-  for (const id of ['login-screen', 'change-screen', 'portal-screen', 'login-form', 'change-form',
+  for (const id of ['login-screen', 'portal-screen', 'login-form',
     'search-form', 'investigation-form', 'account-form', 'export-interactions', 'detail',
     'tv-interactions-list']) {
     assert.match(html, new RegExp(`id="${id}"`));
   }
-  assert.match(html, /href="\.\/privacidade\.html"/);
-  assert.match(html, /id="change-screen"[^>]*hidden/);
+  assert.doesNotMatch(html, /id="change-form"|Senha temporária|Troca obrigatória/);
   assert.match(html, /id="portal-screen"[^>]*hidden/);
   assert.doesNotMatch(html, /convite|ativação de conta/i);
   const notice = fs.readFileSync(path.join(__dirname, '..', 'public', 'privacidade.html'), 'utf8');
   assert.match(notice, /Aviso de Privacidade/);
   assert.match(notice, /investigaç/);
+  const firstLogin = fs.readFileSync(path.join(__dirname, '..', 'public', 'first-login.html'), 'utf8');
+  assert.match(firstLogin, /id="change-form"/);
+  assert.match(firstLogin, /id="confirm-password"/);
+  assert.match(firstLogin, /id="governance-link"[^>]*hidden/);
+  const firstLoginScript = fs.readFileSync(path.join(__dirname, '..', 'public', 'first-login.js'), 'utf8');
+  assert.match(firstLoginScript, /change-password/);
+  assert.match(firstLogin, /governanca\.castelotecnologia\.com\.br/);
+});
+
+test('first-login form confirms the new password before submitting it', async () => {
+  const elements = {};
+  const calls = [];
+  const doc = { getElementById(id) { return elements[id] ||= element(); } };
+  doc.getElementById('governance-link').hidden = true;
+  doc.getElementById('success').hidden = true;
+  const fetch = async (url, options) => {
+    calls.push({ url, options });
+    return { ok: true, status: 200, json: async () => url.endsWith('/login')
+      ? { must_change_password: true } : { must_change_password: false } };
+  };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'public', 'first-login.js'), 'utf8'), { document: doc, fetch, JSON, Error });
+  doc.getElementById('employee-code').value = 'EMP1';
+  doc.getElementById('password').value = 'temporary';
+  await doc.getElementById('login-form').fire('submit');
+  assert.equal(doc.getElementById('change-form').hidden, false);
+  doc.getElementById('current-password').value = 'temporary';
+  doc.getElementById('new-password').value = 'a-long-new-password';
+  doc.getElementById('confirm-password').value = 'different-password';
+  await doc.getElementById('change-form').fire('submit');
+  assert.equal(calls.some(call => call.url.endsWith('/change-password')), false);
+  doc.getElementById('confirm-password').value = 'a-long-new-password';
+  await doc.getElementById('change-form').fire('submit');
+  assert.deepEqual(calls.map(call => call.url), ['/api/auth/login', '/api/auth/change-password', '/api/auth/logout']);
+  assert.equal(JSON.parse(calls[1].options.body).current_password, 'temporary');
+  assert.equal(doc.getElementById('success').hidden, false);
+  assert.equal(doc.getElementById('governance-link').hidden, false);
 });
 
 test('logout clears sensitive content and returns to login', async () => {

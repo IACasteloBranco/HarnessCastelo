@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; base-uri 'none'; object-src 'none'; form-action 'self'">
+  <meta name="referrer" content="no-referrer">
+  <title>Primeiro acesso · Castelo Branco</title>
+  <link rel="stylesheet" href="./first-login.css">
+  <script defer src="./first-login.js"></script>
+</head>
+<body>
+  <main>
+    <img src="./castelo-footer-logo.png" alt="Castelo Branco">
+    <h1>Primeiro acesso</h1>
+    <p>Entre com o código do colaborador e a senha temporária para definir sua senha pessoal.</p>
+    <p id="message" role="alert" aria-live="polite"></p>
+    <form id="login-form">
+      <label>Código do colaborador <input id="employee-code" required maxlength="128" autocomplete="username"></label>
+      <label>Senha temporária <input id="password" type="password" required autocomplete="current-password"></label>
+      <button>Continuar</button>
+    </form>
+    <form id="change-form" hidden>
+      <label>Senha temporária atual <input id="current-password" type="password" required autocomplete="current-password"></label>
+      <label>Nova senha (mínimo 12 caracteres) <input id="new-password" type="password" required minlength="12" autocomplete="new-password"></label>
+      <label>Confirme a nova senha <input id="confirm-password" type="password" required minlength="12" autocomplete="new-password"></label>
+      <button>Definir senha</button>
+    </form>
+    <p id="success" hidden>Senha alterada. Acesse a Governança e entre novamente com sua nova senha.</p>
+    <a id="governance-link" href="https://governanca.castelotecnologia.com.br/" hidden>Ir para a Governança</a>
+  </main>
+</body>
+</html>
