@@ -56,7 +56,7 @@ test('temporary password login directs to governance and never starts capture', 
     {url: 'chrome-extension://test/src/popup/popup.html'});
   assert.equal(result.ok, true, result.error);
   assert.equal(result.data.must_change_password, true);
-  assert.equal(result.data.password_change_url, 'http://127.0.0.1:18081/change-password');
+  assert.equal(result.data.password_change_url, 'https://primeiro-login.castelotecnologia.com.br/');
   assert.equal(local.authSession, undefined);
   assert.equal(local.enabled, undefined);
 });

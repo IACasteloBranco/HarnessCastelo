@@ -5,10 +5,11 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from governanca.server.capture_app.integration import (
     capture_app,
@@ -73,10 +74,24 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type", "X-Machine-Id", "X-Machine-Timestamp",
                    "X-Machine-Nonce", "X-Machine-Signature"],
 )
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=[
+    "governanca.castelotecnologia.com.br", "primeiro-login.castelotecnologia.com.br",
+    "localhost", "127.0.0.1", "app.test", "capture.test", "governanca.test",
+])
 
 
 @app.middleware("http")
 async def require_capture_store(request: Request, call_next):
+    if request.url.hostname == "primeiro-login.castelotecnologia.com.br":
+        allowed_paths = {
+            "/", "/first-login.html", "/first-login.js", "/first-login.css",
+            "/castelo-footer-logo.png", "/api/auth/login", "/api/auth/me",
+            "/api/auth/change-password", "/api/auth/logout",
+        }
+        if request.url.path not in allowed_paths:
+            return JSONResponse(status_code=404, content={"detail": "Not found"})
+    elif request.url.path in {"/first-login.html", "/first-login.js", "/first-login.css"}:
+        return JSONResponse(status_code=404, content={"detail": "Not found"})
     if request.url.path.startswith("/api/capture/") and not app.state.capture_store_ready:
         return JSONResponse(status_code=503, content={"detail": "Capture store unavailable"})
     return await call_next(request)
@@ -89,9 +104,16 @@ async def health():
 
 _portal = Path(__file__).resolve().parent / "public"
 
-@app.get("/change-password")
-async def change_password_page():
+@app.get("/", include_in_schema=False)
+async def first_login_page(request: Request):
+    if request.url.hostname == "primeiro-login.castelotecnologia.com.br":
+        return FileResponse(_portal / "first-login.html", headers={"Cache-Control": "no-store"})
     return FileResponse(_portal / "index.html")
+
+
+@app.get("/change-password", include_in_schema=False)
+async def removed_password_change_page():
+    raise HTTPException(status_code=404)
 
 
 @app.get("/tv")
