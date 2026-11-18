@@ -166,6 +166,11 @@ test('TV dashboard loads prompts and responses with employee and department', as
   assert.doesNotMatch(html, /tv-request-content|Solicitar exibição/);
 });
 
+test('governance portal uses a new cache key for its migrated application script', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+  assert.match(html, /app\.js\?v=20261118-governance-cache-fix/);
+});
+
 test('first-login document owns the password-change forms and links back to governance', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
   for (const id of ['login-screen', 'portal-screen', 'login-form',
