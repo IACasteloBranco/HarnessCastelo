@@ -140,6 +140,89 @@ class IndependentIdentityTests(unittest.IsolatedAsyncioTestCase):
             self.assertGreater(len(password), 20)
             self.assertTrue((await auth.login("collaborator-" + suffix, password))[1])
 
+    async def test_governance_can_reset_collaborator_password_and_revoke_sessions(self):
+        from governanca.server.identity import api, auth, database
+
+        os.environ["GOVERNANCA_DATABASE_URL"] = os.environ["HARNESS_TEST_DATABASE_URL"]
+        command.upgrade(Config(str(Path(__file__).resolve().parents[2] / "alembic.ini")), "head")
+        database._session_factory.cache_clear()
+        suffix = uuid4().hex
+        organization = "org-" + suffix
+        department = "dept-" + suffix
+        governance_code = "governance-" + suffix
+        collaborator_code = "collaborator-" + suffix
+        await auth.provision_organization(organization, "Test organization")
+        await auth.provision_department(organization, department, "Test department")
+        governance_password = await auth.provision_employee(organization, governance_code, "governance")
+        old_password = await auth.provision_employee(
+            organization, collaborator_code, "collaborator", department
+        )
+        old_login = await auth.login(collaborator_code, old_password)
+        self.assertIsNotNone(old_login)
+        assert old_login is not None
+        old_session, _ = old_login
+        app = FastAPI()
+        app.include_router(api.router)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="https://governanca.test"
+        ) as client:
+            headers = {"Origin": "https://governanca.test"}
+            await client.post("/api/auth/login", headers=headers, json={
+                "employee_code": governance_code, "password": governance_password,
+            })
+            changed = await client.post("/api/auth/change-password", headers=headers, json={
+                "current_password": governance_password,
+                "new_password": "changed-governance-password-123",
+            })
+            self.assertEqual(changed.status_code, 200)
+            reset = await client.post("/api/auth/governance/accounts/reset-password", headers=headers, json={
+                "employee_code": collaborator_code,
+            })
+
+        self.assertEqual(reset.status_code, 200, reset.text)
+        self.assertEqual(reset.headers["cache-control"], "no-store")
+        self.assertTrue(reset.json()["must_change_password"])
+        new_password = reset.json()["temporary_password"]
+        self.assertGreater(len(new_password), 20)
+        self.assertNotEqual(new_password, old_password)
+        self.assertIsNone(await auth.resolve_session(old_session))
+        self.assertIsNone(await auth.login(collaborator_code, old_password))
+        new_login = await auth.login(collaborator_code, new_password)
+        self.assertIsNotNone(new_login)
+        assert new_login is not None
+        new_session, must_change_password = new_login
+        self.assertTrue(must_change_password)
+        self.assertIsNotNone(await auth.resolve_session(new_session))
+
+    async def test_collaborator_cannot_reset_another_collaborators_password(self):
+        from governanca.server.identity import api, auth, database
+
+        os.environ["GOVERNANCA_DATABASE_URL"] = os.environ["HARNESS_TEST_DATABASE_URL"]
+        command.upgrade(Config(str(Path(__file__).resolve().parents[2] / "alembic.ini")), "head")
+        database._session_factory.cache_clear()
+        suffix = uuid4().hex
+        organization = "org-" + suffix
+        department = "dept-" + suffix
+        await auth.provision_organization(organization, "Test organization")
+        await auth.provision_department(organization, department, "Test department")
+        first_code = "collaborator-a-" + suffix
+        second_code = "collaborator-b-" + suffix
+        first_password = await auth.provision_employee(organization, first_code, "collaborator", department)
+        await auth.provision_employee(organization, second_code, "collaborator", department)
+        app = FastAPI()
+        app.include_router(api.router)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="https://governanca.test"
+        ) as client:
+            headers = {"Origin": "https://governanca.test"}
+            await client.post("/api/auth/login", headers=headers, json={
+                "employee_code": first_code, "password": first_password,
+            })
+            response = await client.post("/api/auth/governance/accounts/reset-password", headers=headers, json={
+                "employee_code": second_code,
+            })
+        self.assertEqual(response.status_code, 403)
+
     async def test_access_request_is_immediately_granted_and_scoped_to_requester(self):
         from governanca.server.identity import auth, database, investigations
         from governanca.server.identity.models import Employee
