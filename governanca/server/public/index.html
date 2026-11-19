@@ -7,7 +7,7 @@
   <title>Governança de IA</title>
   <link rel="stylesheet" href="./portal.css?v=20261116-markdown">
   <script defer src="./markdown-it.min.js?v=20261116-markdown"></script>
-  <script defer src="./app.js?v=20261118-governance-cache-fix"></script>
+  <script defer src="./app.js?v=20261118-password-reset"></script>
 </head>
 <body>
   <header>
@@ -60,7 +60,8 @@
         <button id="export-interactions" type="button" hidden>Exportar todas as interações do colaborador</button>
       </section>
       <section aria-labelledby="accounts-title">
-        <h3 id="accounts-title">Criar colaborador</h3>
+        <h3 id="accounts-title">Contas de colaboradores</h3>
+        <h4>Criar colaborador</h4>
         <form id="account-form">
           <label>Código do colaborador <input id="account-code" required maxlength="128"></label>
           <label>Nome <input id="account-name" required maxlength="255"></label>
@@ -69,6 +70,12 @@
         </form>
         <p id="account-result" role="status" aria-live="polite"></p>
         <button id="copy-temporary-password" type="button" hidden>Copiar senha temporária</button>
+        <h4>Redefinir senha</h4>
+        <p>Gera uma nova senha temporária, encerra as sessões existentes e exige a troca no próximo acesso.</p>
+        <form id="reset-account-form">
+          <label>Código do colaborador <input id="reset-account-code" required maxlength="128" autocomplete="off"></label>
+          <button type="submit">Redefinir senha temporária</button>
+        </form>
       </section>
     </section>
     <section id="tv-screen" hidden aria-labelledby="tv-title">

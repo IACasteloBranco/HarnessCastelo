@@ -123,12 +123,22 @@ async def provision_employee(
     return password
 
 
-async def reset_password(employee_code: str) -> str:
+async def reset_password(
+    employee_code: str, *, organization_code: str | None = None, role: str | None = None
+) -> str:
     employee_code = _code(employee_code, 128)
     password = _temporary_password()
     encoded = await asyncio.to_thread(_password_hash, password)
     async with session_factory()() as session, session.begin():
-        employee = await session.scalar(select(Employee).where(Employee.code == employee_code).with_for_update())
+        filters = [Employee.code == employee_code]
+        if organization_code is not None:
+            organization_id = await session.scalar(select(Organization.id).where(Organization.code == organization_code))
+            if organization_id is None:
+                raise ValueError("active employee not found")
+            filters.append(Employee.organization_id == organization_id)
+        if role is not None:
+            filters.append(Employee.role == role)
+        employee = await session.scalar(select(Employee).where(*filters).with_for_update())
         if employee is None or employee.disabled:
             raise ValueError("active employee not found")
         employee.password_hash = encoded

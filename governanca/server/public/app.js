@@ -32,6 +32,7 @@ async function api(url, options = {}) {
 function errorMessage(error) { $('message').textContent = error.message; }
 let activeCase = null;
 let temporaryPassword = '';
+let accountOperationVersion = 0;
 let detailVersion = 0;
 let interactionVersion = 0;
 let analyticsVersion = 0;
@@ -350,6 +351,7 @@ $('export-interactions').addEventListener('click', async () => {
 });
 $('account-form').addEventListener('submit', async event => {
   event.preventDefault();
+  const version = ++accountOperationVersion;
   temporaryPassword = '';
   $('copy-temporary-password').hidden = true;
   $('account-result').textContent = '';
@@ -359,11 +361,35 @@ $('account-form').addEventListener('submit', async event => {
       display_name: $('account-name').value.trim(),
       department_code: $('account-department').value,
     }) });
+    if (version !== accountOperationVersion || $('portal-screen').hidden) return;
     temporaryPassword = result.temporary_password;
     $('account-result').textContent = `Conta ${result.employee_code} criada. Senha temporária: ${temporaryPassword}. Ela será exibida apenas nesta sessão e deverá ser trocada no primeiro acesso.`;
     $('copy-temporary-password').hidden = false;
     $('account-form').reset();
-  } catch (error) { errorMessage(error); }
+  } catch (error) {
+    if (version === accountOperationVersion) errorMessage(error);
+  }
+});
+$('reset-account-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const version = ++accountOperationVersion;
+  temporaryPassword = '';
+  $('copy-temporary-password').hidden = true;
+  $('account-result').textContent = '';
+  const employeeCode = $('reset-account-code').value.trim();
+  if (!employeeCode || !confirm(`Redefinir a senha de ${employeeCode}? As sessões existentes serão encerradas.`)) return;
+  try {
+    const result = await api('/api/auth/governance/accounts/reset-password', {
+      method: 'POST', body: JSON.stringify({ employee_code: employeeCode }),
+    });
+    if (version !== accountOperationVersion || $('portal-screen').hidden) return;
+    temporaryPassword = result.temporary_password;
+    $('account-result').textContent = `Senha temporária de ${result.employee_code}: ${temporaryPassword}. A colaboradora deverá trocá-la no próximo acesso.`;
+    $('copy-temporary-password').hidden = false;
+    $('reset-account-form').reset();
+  } catch (error) {
+    if (version === accountOperationVersion) errorMessage(error);
+  }
 });
 $('copy-temporary-password').addEventListener('click', async () => {
   if (!temporaryPassword) return;
@@ -376,6 +402,7 @@ $('copy-temporary-password').addEventListener('click', async () => {
 $('logout').addEventListener('click', async () => {
   try {
     await api('/api/auth/logout', { method: 'POST' });
+    accountOperationVersion++;
     activeCase = null;
     interactionVersion++;
     analyticsVersion++;

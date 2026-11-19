@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from .auth import (EmployeeInfo, EXTENSION_SESSION_DURATION, SESSION_DURATION,
-                   change_password, login, logout, provision_employee,
+                   change_password, login, logout, provision_employee, reset_password,
                    renew_extension_session, resolve_session)
 from .database import session_factory
 from .models import Department, Employee
@@ -34,6 +34,10 @@ class CollaboratorBody(BaseModel):
     employee_code: str = Field(min_length=1, max_length=128)
     display_name: str = Field(min_length=1, max_length=255)
     department_code: str = Field(min_length=1, max_length=64)
+
+
+class CollaboratorResetBody(BaseModel):
+    employee_code: str = Field(min_length=1, max_length=128)
 
 
 def _check_origin(request: Request) -> None:
@@ -75,6 +79,22 @@ async def create_collaborator(body: CollaboratorBody, request: Request, response
                                             "collaborator", body.department_code, body.display_name)
     except (ValueError, IntegrityError) as exc:
         raise HTTPException(409, str(exc) if isinstance(exc, ValueError) else "employee code already exists") from exc
+    return {"employee_code": body.employee_code, "temporary_password": password,
+            "must_change_password": True}
+
+
+@router.post("/governance/accounts/reset-password")
+async def reset_collaborator_password(body: CollaboratorResetBody, request: Request, response: Response,
+                                      employee: EmployeeInfo = Depends(current_employee)):
+    _check_origin(request)
+    require_governance(employee)
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        password = await reset_password(
+            body.employee_code, organization_code=employee.organization_code, role="collaborator"
+        )
+    except ValueError as exc:
+        raise HTTPException(404, "active collaborator not found") from exc
     return {"employee_code": body.employee_code, "temporary_password": password,
             "must_change_password": True}
 

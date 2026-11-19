@@ -16,9 +16,10 @@ function element() {
     async fire(type) { return this.listeners[type]({ preventDefault() {}, currentTarget: this }); },
   };
 }
-async function portal(responses, pathname = '/') {
+async function portal(responses, pathname = '/', confirmResult = true) {
   const ids = {};
   const calls = [];
+  const confirmations = [];
   const location = { pathname, replace(url) { this.href = url; } };
   const history = { replaceState(_state, _title, url) { location.pathname = url; } };
   const document = {
@@ -39,10 +40,11 @@ async function portal(responses, pathname = '/') {
   };
   vm.runInNewContext(fs.readFileSync(script, 'utf8'), {
     document, fetch, URLSearchParams, location, history, console, Date, Intl,
+    confirm(message) { confirmations.push(message); return confirmResult; },
     setInterval() { return 1; }, clearInterval() {}, setTimeout() { return 1; }, clearTimeout() {},
   });
   await new Promise(resolve => setImmediate(resolve));
-  return { ids, calls, location, el: id => document.getElementById(id) };
+  return { ids, calls, confirmations, location, el: id => document.getElementById(id) };
 }
 
 test('governance portal redirects temporary-password sessions to the dedicated host', async () => {
@@ -146,6 +148,64 @@ test('governance creates collaborator credentials without machine approval contr
   assert.doesNotMatch(html, /Aprovações de máquinas|Atualizar identificação|Solicitar vínculo/);
 });
 
+test('governance resets a collaborator password only after confirmation', async () => {
+  const p = await portal({
+    '/api/auth/me': { role: 'governance', must_change_password: false },
+    '/api/capture/v1/admin/analytics/summary': { totals: { interactions: 0, responses: 0 } },
+    '/api/capture/v1/admin/analytics/departments': { departments: [] },
+    '/api/capture/v1/admin/analytics/interactions': { items: [], total: 0 },
+    '/api/governance/investigations': { investigations: [] },
+    '/api/auth/governance/accounts/reset-password': {
+      employee_code: 'EMP3', temporary_password: 'reset-temp', must_change_password: true,
+    },
+  });
+  p.el('reset-account-code').value = 'EMP3';
+  await p.el('reset-account-form').fire('submit');
+  const reset = p.calls.at(-1);
+  assert.equal(reset.url, '/api/auth/governance/accounts/reset-password');
+  assert.deepEqual(JSON.parse(reset.options.body), { employee_code: 'EMP3' });
+  assert.match(p.confirmations[0], /EMP3/);
+  assert.match(p.el('account-result').textContent, /reset-temp/);
+  assert.equal(p.el('copy-temporary-password').hidden, false);
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+  assert.match(html, /id="reset-account-form"/);
+});
+
+test('canceling a password reset sends no reset request', async () => {
+  const p = await portal({
+    '/api/auth/me': { role: 'governance', must_change_password: false },
+    '/api/capture/v1/admin/analytics/summary': { totals: { interactions: 0, responses: 0 } },
+    '/api/capture/v1/admin/analytics/departments': { departments: [] },
+    '/api/capture/v1/admin/analytics/interactions': { items: [], total: 0 },
+    '/api/governance/investigations': { investigations: [] },
+  }, '/', false);
+  p.el('reset-account-code').value = 'EMP3';
+  await p.el('reset-account-form').fire('submit');
+  assert.equal(p.calls.some(call => call.url === '/api/auth/governance/accounts/reset-password'), false);
+});
+
+test('a password reset response arriving after logout does not reveal the temporary password', async () => {
+  let resolveReset;
+  const p = await portal({
+    '/api/auth/me': { role: 'governance', must_change_password: false },
+    '/api/capture/v1/admin/analytics/summary': { totals: { interactions: 0, responses: 0 } },
+    '/api/capture/v1/admin/analytics/departments': { departments: [] },
+    '/api/capture/v1/admin/analytics/interactions': { items: [], total: 0 },
+    '/api/governance/investigations': { investigations: [] },
+    '/api/auth/governance/accounts/reset-password': () => new Promise(resolve => { resolveReset = resolve; }),
+    '/api/auth/logout': { status: 204 },
+  });
+  p.el('reset-account-code').value = 'EMP3';
+  const pending = p.el('reset-account-form').fire('submit');
+  await new Promise(resolve => setImmediate(resolve));
+  await p.el('logout').fire('click');
+  resolveReset({ employee_code: 'EMP3', temporary_password: 'must-not-reappear', must_change_password: true });
+  await pending;
+  assert.equal(p.el('portal-screen').hidden, true);
+  assert.equal(p.el('account-result').textContent, '');
+  assert.equal(p.el('copy-temporary-password').hidden, true);
+});
+
 test('TV dashboard loads prompts and responses with employee and department', async () => {
   const p = await portal({
     '/api/auth/me': { role: 'governance', must_change_password: false },
@@ -168,7 +228,7 @@ test('TV dashboard loads prompts and responses with employee and department', as
 
 test('governance portal uses a new cache key for its migrated application script', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
-  assert.match(html, /app\.js\?v=20261118-governance-cache-fix/);
+  assert.match(html, /app\.js\?v=20261118-password-reset/);
 });
 
 test('first-login document owns the password-change forms and links back to governance', () => {
