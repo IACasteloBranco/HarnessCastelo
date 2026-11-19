@@ -38,6 +38,7 @@ let interactionVersion = 0;
 let analyticsVersion = 0;
 let tvRefreshTimer = null;
 let tvHasData = false;
+let tvInteractionVersion = 0;
 function clearDetail() { detailVersion++; $('detail').replaceChildren(); }
 function formatDate(value) {
   const date = new Date(value);
@@ -220,11 +221,28 @@ function appendTvBars(target, items, labelKey, valueKey) {
   }
 }
 async function tvDashboard() {
-  const params = todayParams().toString();
+  const departmentFilter = $('tv-department');
+  const params = todayParams();
+  const departmentCode = departmentFilter.value;
+  if (departmentCode) params.set('department_code', departmentCode);
   const query = `?${params}`;
   try {
     const summary = await api(`/api/capture/v1/admin/analytics/tv${query}`);
-    await tvInteractions();
+    if (departmentFilter.children.length === 0) {
+      departmentFilter.value = '';
+      const allDepartments = document.createElement('option');
+      allDepartments.value = '';
+      allDepartments.textContent = 'Todos';
+      departmentFilter.append(allDepartments);
+      for (const item of summary.by_department || []) {
+        const option = document.createElement('option');
+        option.value = item.department_code;
+        option.textContent = item.department_name;
+        departmentFilter.append(option);
+      }
+      departmentFilter.dataset.loaded = 'true';
+    }
+    await tvInteractions(departmentCode);
     const totals = summary.totals;
     const departments = (summary.by_department || []).filter(item => item.interactions > 0);
     const platformRows = (summary.by_platform || []).map(item => ({
@@ -257,8 +275,11 @@ async function tvDashboard() {
       : 'Não foi possível carregar os dados da extensão. Confira a conexão e tente novamente.';
   }
 }
-async function tvInteractions() {
-  const result = await api('/api/capture/v1/admin/analytics/tv-interactions');
+async function tvInteractions(departmentCode = '') {
+  const query = departmentCode ? `?department_code=${encodeURIComponent(departmentCode)}` : '';
+  const version = ++tvInteractionVersion;
+  const result = await api(`/api/capture/v1/admin/analytics/tv-interactions${query}`);
+  if (version !== tvInteractionVersion) return;
   const target = $('tv-interactions-list');
   target.replaceChildren();
   for (const item of result.items) {
@@ -422,6 +443,7 @@ $('logout').addEventListener('click', async () => {
     show('login');
   } catch (error) { errorMessage(error); }
 });
+$('tv-department').addEventListener('change', () => { void tvDashboard(); });
 $('tv-fullscreen').addEventListener('click', async () => {
   try {
     if (document.fullscreenElement) await document.exitFullscreen();

@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; base-uri 'none'; object-src 'none'; form-action 'self'">
   <title>Governança de IA</title>
-  <link rel="stylesheet" href="./portal.css?v=20261116-markdown">
+  <link rel="stylesheet" href="./portal.css?v=20261119-tv-fit">
   <script defer src="./markdown-it.min.js?v=20261116-markdown"></script>
-  <script defer src="./app.js?v=20261119-interaction-list"></script>
+  <script defer src="./app.js?v=20261119-tv-fit"></script>
 </head>
 <body>
   <header>
@@ -86,7 +86,10 @@
             <div><p>GOVERNANÇA DE IA</p><h2 id="tv-title">Central de Comando</h2></div>
           </div>
           <div class="tv-header-actions">
-            <span class="tv-scope">Somente dados da extensão</span>
+              <label class="tv-department-filter" for="tv-department">Departamento
+                <select id="tv-department"><option value="">Todos</option></select>
+              </label>
+              <span class="tv-scope">Somente dados da extensão</span>
             <button id="tv-fullscreen" type="button">Tela cheia</button>
             <button id="tv-logout" type="button">Sair</button>
           </div>

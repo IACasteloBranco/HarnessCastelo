@@ -176,6 +176,7 @@ def department_analytics(
 @router.get("/tv")
 def tv_analytics(
     response: Response,
+    department_code: str | None = Query(default=None, min_length=1, max_length=128),
     start: datetime | None = Query(default=None, alias="from"),
     end: datetime | None = Query(default=None, alias="to"),
     scope: dict = Depends(require_governance_analytics),
@@ -183,7 +184,7 @@ def tv_analytics(
 ) -> dict:
     response.headers["Cache-Control"] = "no-store"
     start, end = _normalize_period(start, end)
-    where, values = _interaction_filter(scope["organization_code"], None, start, end)
+    where, values = _interaction_filter(scope["organization_code"], department_code, start, end)
     with connect(settings) as db:
         totals = db.execute(
             f"""SELECT COUNT(DISTINCT i.interaction_id) AS interactions,
@@ -236,12 +237,15 @@ def tv_analytics(
 
 @router.get("/tv-interactions")
 async def tv_interactions(response: Response,
+                          department_code: str | None = Query(default=None, min_length=1, max_length=128),
                           viewer: dict = Depends(require_content_viewer),
                           settings: Settings = Depends(get_settings)) -> dict:
     response.headers["Cache-Control"] = "no-store"
     now = datetime.now(timezone.utc)
     cutoff = iso(now - timedelta(days=2))
     until = iso(now)
+    department_clause = " AND i.department_code = ?" if department_code else ""
+    department_values = (department_code,) if department_code else ()
     with connect(settings) as db:
         rows = db.execute(
             """SELECT i.interaction_id, i.employee_id,
@@ -255,9 +259,8 @@ async def tv_interactions(response: Response,
                WHERE i.received_at >= ? AND i.received_at <= ? AND EXISTS (
                    SELECT 1 FROM public.employees AS employee
                    WHERE employee.code = i.employee_id
-                     AND employee.organization_id = (SELECT id FROM public.organizations WHERE code = ?))
-               ORDER BY i.received_at DESC""",
-            (cutoff, until, viewer["organization_code"]),
+                     AND employee.organization_id = (SELECT id FROM public.organizations WHERE code = ?))""" + department_clause + " ORDER BY i.received_at DESC",
+                   (cutoff, until, viewer["organization_code"], *department_values),
         ).fetchall()
         responses = db.execute(
             """SELECT r.interaction_id, r.text, r.capture_status, r.received_at
@@ -266,18 +269,18 @@ async def tv_interactions(response: Response,
                WHERE i.received_at >= ? AND i.received_at <= ? AND EXISTS (
                    SELECT 1 FROM public.employees AS employee
                    WHERE employee.code = i.employee_id
-                     AND employee.organization_id = (SELECT id FROM public.organizations WHERE code = ?))
-               ORDER BY r.received_at""",
-            (cutoff, until, viewer["organization_code"]),
+                     AND employee.organization_id = (SELECT id FROM public.organizations WHERE code = ?))""" + department_clause + " ORDER BY r.received_at",
+                   (cutoff, until, viewer["organization_code"], *department_values),
         ).fetchall()
         responses_by_interaction = {}
         for item in responses:
             responses_by_interaction.setdefault(item["interaction_id"], []).append({
                 "text": item["text"], "capture_status": item["capture_status"],
                 "received_at": item["received_at"]})
-        record_privacy_audit(db, "content_read", viewer["actor_sub"],
-                             "GET /v1/admin/analytics/tv-interactions period=48h",
-                             len(rows))
+        audit_action = "GET /v1/admin/analytics/tv-interactions period=48h"
+        if department_code:
+            audit_action += f" department_code={department_code}"
+        record_privacy_audit(db, "content_read", viewer["actor_sub"], audit_action, len(rows))
     return {"period": {"from": cutoff, "to": until},
             "items": [{"interaction_id": row["interaction_id"], "employee_id": row["employee_id"],
                        "person_name": row["person_name"], "department_code": row["department_code"],

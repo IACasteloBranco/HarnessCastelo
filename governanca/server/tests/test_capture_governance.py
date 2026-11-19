@@ -359,6 +359,22 @@ class CaptureGovernanceTests(unittest.IsolatedAsyncioTestCase):
             ).fetchone()
         self.assertIsNotNone(tv_audit)
         self.assertEqual((tv_audit["event_type"], tv_audit["record_count"]), ("content_read", 4))
+        filtered_tv = await client.get("/api/capture/v1/admin/analytics/tv", params={"department_code": self.department})
+        self.assertEqual(filtered_tv.status_code, 200, filtered_tv.text)
+        self.assertEqual(filtered_tv.json()["totals"]["interactions"], 3)
+        self.assertEqual({item["department_code"] for item in filtered_tv.json()["by_department"]}, {self.department})
+        filtered_feed = await client.get("/api/capture/v1/admin/analytics/tv-interactions", params={"department_code": self.department})
+        self.assertEqual(filtered_feed.status_code, 200, filtered_feed.text)
+        self.assertEqual(len(filtered_feed.json()["items"]), 3)
+        self.assertEqual({item["department_code"] for item in filtered_feed.json()["items"]}, {self.department})
+        with connect(get_settings()) as db:
+            filtered_audit = db.execute(
+                """SELECT event_type, record_count FROM privacy_audit
+                   WHERE actor_id = ? AND action = ? ORDER BY audit_id DESC LIMIT 1""",
+                (self.viewer, f"GET /v1/admin/analytics/tv-interactions period=48h department_code={self.department}"),
+            ).fetchone()
+        self.assertIsNotNone(filtered_audit)
+        self.assertEqual((filtered_audit["event_type"], filtered_audit["record_count"]), ("content_read", 3))
         out_of_scope = await client.get(f"/api/capture/v1/interactions/{self.interaction_ids[3]}",
                                         params={"investigation_id": case_id})
         self.assertEqual(out_of_scope.status_code, 403)

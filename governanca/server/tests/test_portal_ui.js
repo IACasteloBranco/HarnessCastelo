@@ -7,9 +7,9 @@ const path = require('node:path');
 const script = path.join(__dirname, '..', 'public', 'app.js');
 function element() {
   return {
-    hidden: false, value: '', textContent: '', children: [], listeners: {}, dataset: {},
+    hidden: false, value: '', textContent: '', children: [], listeners: {}, dataset: {}, style: {},
     addEventListener(type, fn) { this.listeners[type] = fn; },
-    replaceChildren(...nodes) { this.children = nodes; this.textContent = ''; },
+    replaceChildren(...nodes) { this.children = nodes; this.textContent = ''; this.value = ''; },
     append(...nodes) { this.children.push(...nodes); },
     setAttribute(name, value) { this[name] = value; },
     reset() { this.value = ''; },
@@ -210,25 +210,37 @@ test('TV dashboard loads prompts and responses with employee and department', as
   const p = await portal({
     '/api/auth/me': { role: 'governance', must_change_password: false },
     '/api/capture/v1/admin/analytics/tv': { totals: { interactions: 1, employees: 1, departments: 1,
-      incomplete_responses: 0, last_activity_at: null }, by_department: [], by_platform: [] },
-    '/api/capture/v1/admin/analytics/tv-interactions': { items: [{
-      employee_id: 'CB-1', person_name: 'Pessoa teste', department_name: 'Fiscal',
-      platform: 'chatgpt_web', prompt: { text: 'prompt sintético' },
-      responses: [{ text: 'resposta sintética' }],
-    }] },
+      incomplete_responses: 0, last_activity_at: null },
+      by_department: [{ department_code: 'FIN', department_name: 'Fiscal', interactions: 1 }], by_platform: [] },
+    '/api/capture/v1/admin/analytics/tv?department_code=FIN': { totals: { interactions: 1, employees: 1, departments: 1,
+      incomplete_responses: 0, last_activity_at: null },
+      by_department: [{ department_code: 'FIN', department_name: 'Fiscal', interactions: 1 }], by_platform: [] },
+    '/api/capture/v1/admin/analytics/tv-interactions': { items: [{ employee_id: 'CB-1', person_name: 'Pessoa teste',
+      department_name: 'Fiscal', platform: 'chatgpt_web', prompt: { text: 'prompt sintético' },
+      responses: [{ text: 'resposta sintética' }] }] },
+    '/api/capture/v1/admin/analytics/tv-interactions?department_code=FIN': { items: [{ employee_id: 'CB-1',
+      person_name: 'Pessoa teste', department_code: 'FIN', department_name: 'Fiscal', platform: 'chatgpt_web',
+      prompt: { text: 'prompt sintético' }, responses: [{ text: 'resposta sintética' }] }] },
   }, '/tv');
-  assert.match(p.el('tv-content-status').textContent, /últimos 2 dias/);
+  assert.match(p.el('tv-content-status').textContent, /interações recebidas/);
   assert.match(p.el('tv-interactions-list').children[0].children[0].textContent, /Pessoa teste · Fiscal/);
   assert.match(p.el('tv-interactions-list').children[0].children[1].textContent, /prompt sintético/);
   assert.match(p.el('tv-interactions-list').children[0].children[2].textContent, /resposta sintética/);
   assert.ok(p.calls.some(call => call.url === '/api/capture/v1/admin/analytics/tv-interactions'));
+  assert.equal(p.el('tv-department').children[1].textContent, 'Fiscal');
+  p.el('tv-department').value = 'FIN';
+  await p.el('tv-department').fire('change');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.ok(p.calls.some(call => call.url.startsWith('/api/capture/v1/admin/analytics/tv?') && call.url.includes('department_code=FIN')));
+  assert.ok(p.calls.some(call => call.url.includes('/api/capture/v1/admin/analytics/tv-interactions?department_code=FIN')), JSON.stringify(p.calls.map(call => call.url)));
+  assert.equal(p.el('tv-interactions').textContent, '1');
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
   assert.doesNotMatch(html, /tv-request-content|Solicitar exibição/);
 });
 
 test('governance portal uses a new cache key for its migrated application script', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
-  assert.match(html, /app\.js\?v=20261119-interaction-list/);
+  assert.match(html, /app\.js\?v=20261119-tv-fit/);
 });
 
 test('first-login document owns the password-change forms and links back to governance', () => {
