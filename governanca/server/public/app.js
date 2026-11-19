@@ -228,12 +228,7 @@ async function tvDashboard() {
   const query = `?${params}`;
   try {
     const summary = await api(`/api/capture/v1/admin/analytics/tv${query}`);
-    if (departmentFilter.children.length === 0) {
-      departmentFilter.value = '';
-      const allDepartments = document.createElement('option');
-      allDepartments.value = '';
-      allDepartments.textContent = 'Todos';
-      departmentFilter.append(allDepartments);
+    if (!departmentFilter.dataset.loaded) {
       for (const item of summary.by_department || []) {
         const option = document.createElement('option');
         option.value = item.department_code;

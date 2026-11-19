@@ -24,7 +24,11 @@ async function portal(responses, pathname = '/', confirmResult = true) {
   const history = { replaceState(_state, _title, url) { location.pathname = url; } };
   const document = {
     body: { classList: { toggle() {} } },
-    getElementById(id) { return ids[id] ||= element(); },
+    getElementById(id) {
+      const target = ids[id] ||= element();
+      if (id === 'tv-department' && !target.children.length) target.append(Object.assign(element(), { value: '', textContent: 'Todos' }));
+      return target;
+    },
     createElement() { return element(); },
   };
   const fetch = async (url, options = {}) => {
