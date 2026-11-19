@@ -39,14 +39,21 @@ let analyticsVersion = 0;
 let tvRefreshTimer = null;
 let tvHasData = false;
 function clearDetail() { detailVersion++; $('detail').replaceChildren(); }
+function formatDate(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value ?? '') : new Intl.DateTimeFormat('pt-BR', {
+    timeZone: 'America/Sao_Paulo', dateStyle: 'short', timeStyle: 'short',
+  }).format(date);
+}
 function rows(id, items, fields) {
   const target = $(id);
   target.replaceChildren();
   for (const item of items) {
     const row = document.createElement('li');
-    for (const field of fields) {
+    for (const [field, label] of fields) {
       const cell = document.createElement('span');
-      cell.textContent = String(item[field] ?? '');
+      cell.textContent = field === 'received_at' ? formatDate(item[field]) : String(item[field] ?? '');
+      cell.dataset.label = label;
       row.append(cell);
     }
     if (id === 'interactions' && activeCase && activeCase.target_employee_code === item.employee_id) {
@@ -276,7 +283,7 @@ async function interactions() {
     }
     const result = await api(`/api/capture/v1/admin/analytics/interactions${params.size ? `?${params}` : ''}`);
     if (version !== interactionVersion || $('portal-screen').hidden) return;
-    rows('interactions', result.items, ['interaction_id', 'person_name', 'employee_id', 'department_name', 'department_code', 'platform', 'status', 'received_at']);
+    rows('interactions', result.items, [['person_name', 'Pessoa'], ['department_name', 'Departamento'], ['platform', 'Plataforma'], ['status', 'Status'], ['received_at', 'Recebido']]);
     $('interaction-count').textContent = `${result.total} interações`;
   } catch (error) { errorMessage(error); }
 }

@@ -62,18 +62,21 @@ h4 { margin: 1.4rem 0 .6rem; }
 #departments > li dl > div { min-width: 0; padding: .45rem .55rem; border-radius: 7px; background: #f4f2ec; }
 #departments dt { color: var(--muted); font-size: .76rem; }
 #departments dd { margin: .1rem 0 0; color: var(--castelo-navy); font-size: .9rem; font-weight: 650; overflow-wrap: anywhere; }
-#interactions > li, #investigations > li, #machines > li {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: .35rem .8rem;
-  margin: 0;
-  padding: .85rem 0;
-  border-bottom: 1px solid var(--line);
-  overflow-wrap: anywhere;
+#interactions {
+  max-height: 24rem;
+  overflow-y: auto;
+  padding: 0 .8rem;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
+#interactions > li { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .8rem; margin: 0; padding: .7rem 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+#interactions > li span { display: inline-block; margin: 0; }
+#interactions > li span[data-label="Recebido"] { color: var(--muted); font-variant-numeric: tabular-nums; }
+#investigations > li, #machines > li { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .8rem; margin: 0; padding: .85rem 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
 #interactions > li:last-child, #investigations > li:last-child, #machines > li:last-child { border-bottom: 0; }
-#interactions li span, #investigations li span, #machines li span { display: inline-block; margin: 0; }
+#investigations li span, #machines li span { display: inline-block; margin: 0; }
 form { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr)); gap: .85rem 1rem; align-items: end; }
 label { display: block; margin: 0; color: #354e5e; font-size: .93rem; font-weight: 600; }
 input, select, textarea {

@@ -228,7 +228,7 @@ test('TV dashboard loads prompts and responses with employee and department', as
 
 test('governance portal uses a new cache key for its migrated application script', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
-  assert.match(html, /app\.js\?v=20261118-password-reset/);
+  assert.match(html, /app\.js\?v=20261119-interaction-list/);
 });
 
 test('first-login document owns the password-change forms and links back to governance', () => {
@@ -310,7 +310,8 @@ test('older filtered interaction response cannot replace newer results', async (
     '/api/capture/v1/admin/analytics/interactions': { items: [], total: 0 },
     '/api/capture/v1/admin/analytics/interactions?department_code=OLD': () => old,
     '/api/capture/v1/admin/analytics/interactions?department_code=NEW': { items: [
-      { interaction_id: 'new', employee_id: 'EMP' }], total: 1 },
+      { interaction_id: 'new', employee_id: 'EMP', person_name: 'Pessoa nova', department_name: 'Financeiro',
+        department_code: 'FIN', platform: 'chatgpt_web', status: 'complete', received_at: '2026-11-19T15:00:00Z' }], total: 1 },
     '/api/governance/investigations': { investigations: [] },
     '/api/capture/v1/admin/machines/assignment-requests': { items: [] },
   });
@@ -320,7 +321,8 @@ test('older filtered interaction response cannot replace newer results', async (
   await p.el('search-form').fire('submit');
   resolveOld({ items: [{ interaction_id: 'old', employee_id: 'EMP' }], total: 1 });
   await pending;
-  assert.equal(p.el('interactions').children[0].children[0].textContent, 'new');
+  const rendered = p.el('interactions').children[0].children.map(cell => cell.textContent);
+  assert.deepEqual(rendered, ['Pessoa nova', 'Financeiro', 'chatgpt_web', 'complete', '19/11/2026, 12:00']);
 });
 
 test('UTC period applies to summary, departments, and interactions', async () => {
