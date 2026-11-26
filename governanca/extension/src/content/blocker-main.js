@@ -5,7 +5,7 @@
   if (typeof window.fetch !== 'function') return;
   const originalFetch = window.fetch;
   const marker = 'governanca-ai-prompt-block-v1';
-  const protocolVersion = 1;
+  const protocolVersion = 2;
   const conversationPath = /^\/backend-api\/(?:[^/]+\/)*conversation\/?$/;
   const claudeCompletionPath = /^\/api\/organizations\/[^/]+\/chat_conversations\/[^/]+\/completion\/?$/;
   const pendingPreflights = new Map();
