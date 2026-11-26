@@ -23,10 +23,14 @@ class GovernanceInspectionTests(unittest.IsolatedAsyncioTestCase):
         self.inspection = patch.object(inspection, "inspect_sensitive_data", new_callable=AsyncMock,
                                        return_value=())
         self.remote_inspection = self.inspection.start()
+        self.policy = patch("governanca.server.auth_api.policy_for_organization", new_callable=AsyncMock,
+                            return_value={"version": 0, "actions": {f"R{n:02}": None for n in range(1, 10)}})
+        self.policy.start()
 
     async def asyncTearDown(self):
         await self.client.aclose()
         self.inspection.stop()
+        self.policy.stop()
 
     async def test_masks_personal_data_and_allows_cnpj(self):
         response = await self.client.post("/api/auth/extension/inspect", headers={"Origin": EXTENSION_ORIGIN}, json={
@@ -37,6 +41,7 @@ class GovernanceInspectionTests(unittest.IsolatedAsyncioTestCase):
             "action": "mask", "text": "CPF [CPF_1]; e-mail [EMAIL_1]; telefone [PHONE_1]; CNPJ 11.222.333/0001-81",
             "requires_confirmation": True, "policy_version": "governanca-2",
             "categories": ["CNPJ", "CPF", "EMAIL", "PHONE"],
+            "extension_policy": {"version": 0, "actions": {f"R{n:02}": None for n in range(1, 10)}},
         })
 
     async def test_clean_and_cnpj_only_text_needs_no_confirmation(self):
@@ -48,6 +53,19 @@ class GovernanceInspectionTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(response.json()["action"], "allow")
                 self.assertFalse(response.json()["requires_confirmation"])
                 self.assertIsNone(response.json()["text"])
+
+    async def test_active_policy_requires_the_updated_extension_before_inspection(self):
+        self.policy.stop()
+        self.policy = patch("governanca.server.auth_api.policy_for_organization", new_callable=AsyncMock,
+                            return_value={"version": 1, "actions": {f"R{n:02}": None for n in range(1, 10)}})
+        self.policy.start()
+        headers = {"Origin": EXTENSION_ORIGIN}
+        old_client = await self.client.post("/api/auth/extension/inspect", headers=headers,
+                                            json={"text": "texto sem dados"})
+        current_client = await self.client.post("/api/auth/extension/inspect", headers=headers,
+            json={"text": "texto sem dados", "policy_engine_version": "0.1.3"})
+        self.assertEqual(old_client.status_code, 426)
+        self.assertEqual(current_client.status_code, 200)
 
     async def test_rejects_wrong_origin_and_oversized_text(self):
         path = "/api/auth/extension/inspect"

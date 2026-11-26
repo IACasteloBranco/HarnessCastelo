@@ -230,6 +230,48 @@ test('aplica a prévia mascarada ao rascunho sem enviar', async () => {
   assert.match(notices.at(-1).textContent, /aplicado ao rascunho.*clique em Enviar/i);
 });
 
+test('applies the authenticated governance action in the send bridge while retaining capture', async () => {
+  const listeners = new Map();
+  const attributes = new Map();
+  const text = `SIGILOSO\n${'texto fictício '.repeat(50)}`;
+  const form = {contains: () => true, querySelectorAll: () => [button]};
+  const field = {innerText: text, contains: target => target === field, closest: () => form};
+  const button = {type: 'submit', matches: selector => selector === 'button', click: () => {
+    listeners.get('click')(event(button));
+  }};
+  const root = {setAttribute: (key, value) => attributes.set(key, value),
+    getAttribute: key => attributes.get(key), removeAttribute: key => attributes.delete(key)};
+  const document = {documentElement: root, body: {append() {}}, addEventListener() {},
+    querySelector: selector => selector === '#prompt-textarea' ? field : null,
+    querySelectorAll: () => [], createElement: () => ({setAttribute() {}, style: {}, remove() {}})};
+  const port = {onMessage: {addListener: listener => { listeners.set('policy', listener); }},
+    onDisconnect: {addListener() {}}, postMessage() {}};
+  const window = bridgeWindow(listeners, 'https://chatgpt.com', attributes);
+  const actions = Object.fromEntries(Array.from({length: 9}, (_, index) => [`R${String(index + 1).padStart(2, '0')}`, null]));
+  actions.R08 = 'ALLOW';
+  let captures = 0;
+  const runtimeMessages = [];
+  const chrome = {runtime: {connect: () => port, sendMessage: message => message.type === 'inspect_sensitive_text'
+    ? (runtimeMessages.push(message), Promise.resolve({ok: true, data: {action: 'allow', requires_confirmation: false, categories: [],
+      policy_version: 'governanca-2', extension_policy: {version: 2, actions}}}))
+    : (runtimeMessages.push(message), Promise.resolve({}))}};
+  const buttonEvent = target => ({target: {closest: selector => selector === 'button' ? target : null},
+    preventDefault() {}, stopImmediatePropagation() {}});
+  function event(target) { return buttonEvent(target); }
+  runInNewContext(`${policySource}\n${messagesSource}\n${bridgeSource}`, {window, document, chrome,
+    location: {origin: 'https://chatgpt.com', href: 'https://chatgpt.com/c/synthetic'}, URL, Date,
+    setTimeout: () => {}, globalThis: {GovernancaPlatform: {fileRoot: () => form,
+      composer: () => form, sendButton: node => node === button},
+    GovernancaFiles: {observe: () => ({capture_status: 'unavailable', items: [], truncated: false})},
+    GovernancaCaptureAttempt: () => { captures++; }}});
+  listeners.get('policy')({type: 'block_policy', blocked: false, machineAssigned: true,
+    protocolVersion, protocolCompatible: true});
+  listeners.get('click')(buttonEvent(button));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(captures, 1, JSON.stringify(runtimeMessages));
+  assert.equal(attributes.get('data-governanca-block-prompts'), 'allow');
+});
+
 test('anexo visível recebe tempo para upload e mantém a barreira de uso único', () => {
   const listeners = new Map();
   const attrs = new Map();

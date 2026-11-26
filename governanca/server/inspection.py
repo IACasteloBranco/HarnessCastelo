@@ -23,3 +23,13 @@ async def protect_stored_text(text: str) -> str:
     if decision.action == Action.BLOCK or decision.text is None:
         raise HTTPException(422, "Content was blocked by the storage policy")
     return decision.text
+
+
+def policy_configuration() -> dict:
+    return {
+        "version": POLICY_VERSION,
+        "categories": [
+            {"name": category.value, "action": _POLICY[category].value}
+            for category in Category
+        ],
+    }

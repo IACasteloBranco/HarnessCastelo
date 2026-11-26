@@ -172,15 +172,15 @@
       }).catch(() => {});
     } catch {}
   }
-  function evaluate(text) {
+  function evaluate(text, configuredActions) {
     let decision;
     try {
       decision = policySynchronized
-        ? globalThis.GovernancaPromptPolicy?.evaluate(text, {destination})
-        : {version: '0.1.2', action: 'BLOCK', findings: [{rule: 'SYNC', action: 'BLOCK', count: 1}]};
+        ? globalThis.GovernancaPromptPolicy?.evaluate(text, {destination, configuredActions})
+        : {version: '0.1.3', action: 'BLOCK', findings: [{rule: 'SYNC', action: 'BLOCK', count: 1}]};
       if (!decision) throw new Error('Política indisponível');
     } catch {
-      decision = {version: '0.1.2', action: 'REVIEW', findings: [{rule: 'ENGINE', action: 'REVIEW', count: 1}]};
+      decision = {version: '0.1.3', action: 'REVIEW', findings: [{rule: 'ENGINE', action: 'REVIEW', count: 1}]};
     }
     if (manualBlocked === true) decision = {...decision, action: 'BLOCK',
       findings: [...decision.findings, {rule: 'MANUAL', action: 'BLOCK', count: 1}]};
@@ -210,6 +210,10 @@
         .then(async response => {
           if (response?.error === 'Captura ou atribuição indisponível.') {
             showNotice('Envio bloqueado: a captura está pausada ou esta instalação não está atribuída à sua conta. Confira o login e o vínculo.', true);
+            return;
+          }
+          if (response?.error === 'POLICY_ENGINE_UPDATE_REQUIRED') {
+            showNotice('Envio bloqueado: atualize a extensão para a versão 0.6.7 para aplicar a política vigente.', true);
             return;
           }
           const result = response?.ok ? response.data : null;
@@ -246,7 +250,7 @@
             return;
           }
           const replayText = result?.action === 'mask' ? result.text : inspectedText;
-          const replay = {text: replayText.trim(), at: Date.now()};
+          const replay = {text: replayText.trim(), at: Date.now(), policy: result.extension_policy};
           replayingPrompt = replay;
           if (method === 'regenerate') {
             inspect({preventDefault() {}, stopImmediatePropagation() {}}, method, text, turnKey, retryMenuItem);
@@ -271,7 +275,7 @@
       return;
     }
     resetGrant();
-    const decision = evaluate(text);
+    const decision = evaluate(text, replayingPrompt?.text === text ? replayingPrompt.policy?.actions : undefined);
     lastAttempt = {at: now, text, attachments: attachmentKey, action: decision.action, method};
     logDecision(decision, method);
     if (decision.action === 'BLOCK' || decision.action === 'REVIEW') {

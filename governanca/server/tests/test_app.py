@@ -18,11 +18,15 @@ class GovernanceAppTests(unittest.IsolatedAsyncioTestCase):
         self.inspection = patch.object(inspection, "inspect_sensitive_data", new_callable=AsyncMock,
                                        return_value=())
         self.inspection.start()
+        self.policy = patch("governanca.server.auth_api.policy_for_organization", new_callable=AsyncMock,
+                            return_value={"version": 0, "actions": {f"R{n:02}": None for n in range(1, 10)}})
+        self.policy.start()
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="https://app.test")
 
     async def asyncTearDown(self):
         await self.client.aclose()
         self.inspection.stop()
+        self.policy.stop()
         app.dependency_overrides.clear()
 
     async def test_standalone_app_serves_governance_api_without_codex_proxy(self):
@@ -33,6 +37,7 @@ class GovernanceAppTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(health.status_code, 200)
         self.assertEqual(inspection.status_code, 200)
         self.assertEqual(inspection.json()["action"], "allow")
+        self.assertEqual(inspection.json()["extension_policy"]["version"], 0)
         self.assertEqual(codex_proxy.status_code, 404)
 
     async def test_store_extension_origin_can_log_in_and_inspect(self):

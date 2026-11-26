@@ -10,6 +10,7 @@ const PLATFORM_BY_ORIGIN = new Map([
   [CLAUDE_ORIGIN, 'claude_web']
 ]);
 const BLOCKER_PROTOCOL_VERSION = 1; // Bump only for incompatible blocker-message changes.
+const POLICY_ENGINE_VERSION = '0.1.3';
 const PRIVACY_NOTICE_VERSION = '2026-11-16.1';
 const LOCAL_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 const policyPorts = new Set();
@@ -352,12 +353,20 @@ async function inspectSensitiveText(text) {
   if (!identity || identity.must_change_password === true) throw new Error('Sessão Harness ausente ou expirada.');
   const response = await fetch(`${API}/api/auth/extension/inspect`, {
     method: 'POST', headers: {'Content-Type': 'application/json', Authorization: `Bearer ${identity.access_token}`},
-    body: JSON.stringify({text}), signal: AbortSignal.timeout(10_000), cache: 'no-store'
+    body: JSON.stringify({text, policy_engine_version: POLICY_ENGINE_VERSION}),
+    signal: AbortSignal.timeout(10_000), cache: 'no-store'
   });
   const data = await response.json().catch(() => ({}));
+  if (response.status === 426) throw new Error('POLICY_ENGINE_UPDATE_REQUIRED');
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const policyActions = data.extension_policy?.actions;
+  const ruleIds = ['R01', 'R02', 'R03', 'R04', 'R05', 'R06', 'R07', 'R08', 'R09'];
   if (!['allow', 'mask', 'block'].includes(data.action) ||
       typeof data.requires_confirmation !== 'boolean' || typeof data.policy_version !== 'string' ||
+      !Number.isSafeInteger(data.extension_policy?.version) || data.extension_policy.version < 0 ||
+      !policyActions || Object.keys(policyActions).length !== ruleIds.length ||
+      ruleIds.some(rule => !(rule in policyActions) ||
+        (policyActions[rule] !== null && !['ALLOW', 'WARN', 'REVIEW', 'BLOCK'].includes(policyActions[rule]))) ||
       !Array.isArray(data.categories) || !data.categories.every(category =>
         ['CPF', 'CNPJ', 'EMAIL', 'PHONE', 'PERSON_NAME', 'AGE', 'GENDER', 'ETHNIC_GROUP',
           'MARITAL_STATUS', 'SEXUAL_ORIENTATION', 'MEDICAL_DATA', 'EMPLOYMENT_STATUS',
@@ -775,7 +784,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       const actions = new Set(['ALLOW', 'WARN', 'REVIEW', 'BLOCK']);
       const rules = new Set(['R01', 'R02', 'R03', 'R04', 'R05', 'R06', 'R07', 'R08', 'R09', 'LIMIT', 'ENGINE', 'MANUAL', 'MACHINE', 'SYNC']);
       const methods = new Set(['click', 'enter', 'submit', 'regenerate', 'network']);
-      if (message.version !== '0.1.2' || message.destination !== 'not_approved' || !actions.has(message.action) ||
+      if (message.version !== POLICY_ENGINE_VERSION || message.destination !== 'not_approved' || !actions.has(message.action) ||
           !methods.has(message.method) || !Array.isArray(message.findings) || message.findings.length > 12 ||
           !message.findings.every(item => rules.has(item.rule) && actions.has(item.action) &&
             Number.isSafeInteger(item.count) && item.count >= 1 && item.count <= 100))

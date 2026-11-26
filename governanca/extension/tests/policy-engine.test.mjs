@@ -84,3 +84,27 @@ test('R08 exige conteúdo substancial; R09 não bloqueia assunto fiscal isolado'
   const companies = Array.from({length: 10}, (_, index) => cnpj(100000000001 + index));
   assert.equal(decide(`Faturamento\n${companies.join('\n')}`).action, 'REVIEW');
 });
+
+test('governance actions are applied per installation evaluation and cannot override the hard text limit', () => {
+  const text = `SIGILOSO\n${'texto fictício '.repeat(50)}`;
+  const organizationPolicy = {R08: 'ALLOW'};
+  const instance = () => {
+    const isolated = {};
+    runInNewContext(source, {globalThis: isolated});
+    return isolated.GovernancaPromptPolicy;
+  };
+  const installationA = instance().evaluate(text, {
+    destination: 'not_approved', configuredActions: organizationPolicy,
+  });
+  const installationB = instance().evaluate(text, {
+    destination: 'not_approved', configuredActions: organizationPolicy,
+  });
+  assert.equal(installationA.action, 'ALLOW');
+  assert.equal(installationB.action, 'ALLOW');
+  assert.notEqual(installationA, installationB);
+  assert.equal(decide(text).action, 'REVIEW');
+  const limited = scope.GovernancaPromptPolicy.evaluate('x'.repeat(100001), {
+    destination: 'not_approved', configuredActions: {LIMIT: 'ALLOW'},
+  });
+  assert.equal(limited.action, 'REVIEW');
+});

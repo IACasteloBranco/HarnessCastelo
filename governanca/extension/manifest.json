@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Governança de IA Castelo Branco Contabilidade",
-  "version": "0.6.6",
+  "version": "0.6.7",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAmWIgH7LhN5lGhtvThpyuxBcLP7WP7/AuprTN2caAlWtG1FV8UT7oU12OY18aMo2iRhYhloToofozx8czLRP5D34zWOpvQIE/qjeMPfL8fZ7T4i9Dq9MeQZ83OjHpCElheW9kVM0zke+Mh4C7Ug5QVYnZdBbNBVDEZt0V0NegmhLtF+HrUmqISIyiNZNLJSOXzQDxUPah5QdEbpH+OX7c4Lu9jVjEsYgDTY7ZHxjWFRn19okrYQWnONqpEM+l75CuxR7cG2iF251jQMGVpXbdEtHDShMQHHg/EC3SeJ0AZmQooTpIA+WrFWF/OTkFlwGiU26sm2iGQeYURWsaidMX0QIDAQAB",
   "description": "Captura conversas observadas, vinculadas à instalação atribuída.",
   "permissions": ["storage", "tabs", "alarms"],
