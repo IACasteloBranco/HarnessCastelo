@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
@@ -12,6 +12,10 @@ from .auth import (EmployeeInfo, EXTENSION_SESSION_DURATION, SESSION_DURATION,
                    renew_extension_session, resolve_session)
 from .database import session_factory
 from .models import Department, Employee
+from governanca.server.backup_status import get_backup_status
+from governanca.server.policy_catalog import (
+    EDITABLE_ACTIONS, EDITABLE_RULES, get_policy_catalog, policy_for_organization, save_policy,
+)
 
 router = APIRouter(prefix="/api/auth", tags=["internal-auth"])
 COOKIE_NAME = "governanca_session"
@@ -40,6 +44,20 @@ class CollaboratorResetBody(BaseModel):
     employee_code: str = Field(min_length=1, max_length=128)
 
 
+class PolicyUpdateBody(BaseModel):
+    expected_version: int = Field(ge=0)
+    actions: dict[str, str | None]
+
+    @field_validator("actions")
+    @classmethod
+    def valid_actions(cls, value):
+        if set(value) != set(EDITABLE_RULES) or any(
+            action not in (*EDITABLE_ACTIONS, None) for action in value.values()
+        ):
+            raise ValueError("actions must configure R01-R09 with a supported action or null")
+        return value
+
+
 def _check_origin(request: Request) -> None:
     allowed = f"{request.url.scheme}://{request.url.netloc}"
     if request.headers.get("Origin") != allowed:
@@ -66,6 +84,38 @@ async def governance_departments(employee: EmployeeInfo = Depends(current_employ
         departments = (await session.scalars(select(Department).where(
             Department.organization_id == actor.organization_id).order_by(Department.name))).all()
     return {"departments": [{"code": item.code, "name": item.name} for item in departments]}
+
+
+@router.get("/governance/backup-status")
+async def governance_backup_status(response: Response,
+                                  employee: EmployeeInfo = Depends(current_employee)):
+    require_governance(employee)
+    response.headers["Cache-Control"] = "no-store"
+    return get_backup_status()
+
+
+@router.get("/governance/policies")
+async def governance_policies(response: Response,
+                              employee: EmployeeInfo = Depends(current_employee)):
+    require_governance(employee)
+    response.headers["Cache-Control"] = "no-store"
+    return get_policy_catalog(await policy_for_organization(employee.organization_code))
+
+
+@router.put("/governance/policies")
+async def update_governance_policies(body: PolicyUpdateBody, request: Request, response: Response,
+                                    employee: EmployeeInfo = Depends(current_employee)):
+    _check_origin(request)
+    require_governance(employee)
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        policy = await save_policy(employee.organization_code, employee.employee_id,
+                                   body.expected_version, body.actions)
+    except RuntimeError as exc:
+        raise HTTPException(409, "policy was changed by another governance user; reload it") from exc
+    except ValueError as exc:
+        raise HTTPException(404, "organization not found") from exc
+    return policy
 
 
 @router.post("/governance/accounts", status_code=201)

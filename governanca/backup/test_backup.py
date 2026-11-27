@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from governanca.backup.backup import main, tier_for, upload
+from governanca.backup.backup import main, tier_for, upload, write_status_marker
 
 
 class BackupTests(unittest.TestCase):
@@ -48,6 +48,13 @@ class BackupTests(unittest.TestCase):
                 main()
             marker.write_text(datetime.now(timezone.utc).isoformat())
             main()
+
+    def test_status_export_contains_only_the_success_timestamp(self):
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "status" / "last-success"
+            timestamp = datetime(2026, 11, 26, 2, 55, tzinfo=timezone.utc)
+            write_status_marker(marker, timestamp)
+            self.assertEqual(marker.read_text(), timestamp.isoformat())
 
 
 if __name__ == "__main__":

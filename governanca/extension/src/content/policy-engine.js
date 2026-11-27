@@ -1,5 +1,5 @@
 (() => {
-  const VERSION = '0.1.2';
+  const VERSION = '0.1.3';
   const MAX_CHARS = 100000;
   const PRIORITY = {ALLOW: 0, WARN: 1, REVIEW: 2, BLOCK: 3};
   const CPF_CANDIDATE = /(?<!\d)(?:\d{3}[.\s-]?\d{3}[.\s-]?\d{3}[-.\s]?\d{2}|\d{11})(?!\d)/g;
@@ -113,6 +113,13 @@
     if (cnpjs.size >= 10 && /\bfaturamento\b/i.test(text) && restrictedDestination)
       add('R09', 'REVIEW', cnpjs.size);
 
+    const configuredActions = context.configuredActions && typeof context.configuredActions === 'object'
+      ? context.configuredActions : {};
+    for (const finding of findings) {
+      const configured = configuredActions[finding.rule];
+      if (['ALLOW', 'WARN', 'REVIEW', 'BLOCK'].includes(configured) && finding.rule !== 'LIMIT')
+        finding.action = configured;
+    }
     const action = findings.reduce((current, item) =>
       PRIORITY[item.action] > PRIORITY[current] ? item.action : current, 'ALLOW');
     return {version: VERSION, destination, action, findings};

@@ -102,6 +102,22 @@ test('reports a paused capture without storing prompt text', async () => {
   assert.equal(JSON.stringify(local.captureDiagnostics).includes('SYNTHETIC-PRIVATE-MARKER'), false);
 });
 
+test('sends the policy engine version and accepts a versioned backend policy', async () => {
+  let request;
+  const actions = Object.fromEntries(Array.from({length: 9}, (_, index) => [`R${String(index + 1).padStart(2, '0')}`, null]));
+  const {send} = worker({localData: captureReadyData(), fetchImpl: async (url, options) => {
+    if (!url.endsWith('/api/auth/extension/inspect')) throw new Error('unexpected fetch');
+    request = JSON.parse(options.body);
+    return {ok: true, status: 200, json: async () => ({action: 'allow', text: null,
+      requires_confirmation: false, policy_version: 'governanca-2', categories: [],
+      extension_policy: {version: 1, actions}})};
+  }});
+  const result = await send({type: 'inspect_sensitive_text', text: 'conteúdo sintético'});
+  assert.equal(result.ok, true, result.error);
+  assert.equal(request.policy_engine_version, '0.1.3');
+  assert.equal(result.data.extension_policy.version, 1);
+});
+
 test('isolates two active installations for one account through activation, capture, mismatch, and logout', async () => {
   const ids = ['00000000-0000-4000-8000-0000000000a1', '00000000-0000-4000-8000-0000000000b2'];
   const machines = new Map();
@@ -306,7 +322,7 @@ test('reports each capture readiness requirement without exposing credentials', 
   assert.equal(JSON.stringify(diagnostic).includes('synthetic-token'), false);
 
   local.enabled = false;
-  await send({type: 'prompt_decision', version: '0.1.2', destination: 'not_approved',
+  await send({type: 'prompt_decision', version: '0.1.3', destination: 'not_approved',
     method: 'click', action: 'BLOCK', primaryRule: 'MACHINE',
     findings: [{rule: 'MACHINE', action: 'BLOCK', count: 1}]});
   const decision = local.captureDiagnostics.find(item => item.stage === 'policy_decision');

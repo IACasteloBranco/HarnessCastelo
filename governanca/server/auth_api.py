@@ -12,6 +12,7 @@ from governanca.server.identity.api import (
 )
 from governanca.server.data_protection import Action
 from governanca.server.inspection import inspect_text
+from governanca.server.policy_catalog import EXTENSION_POLICY_VERSION, policy_for_organization
 from governanca.server.sensitive_data_protection import InspectionUnavailable
 
 router = APIRouter()
@@ -22,6 +23,7 @@ inspection_router = APIRouter(prefix="/api/auth", tags=["extension-inspection"])
 
 class SensitiveTextBody(BaseModel):
     text: str = Field(max_length=100_000)
+    policy_engine_version: str | None = Field(default=None, max_length=32)
 
 
 @inspection_router.post("/extension/inspect")
@@ -34,6 +36,9 @@ async def extension_inspect_route(
     response.headers["Cache-Control"] = "no-store"
     if request.headers.get("Origin") not in EXTENSION_ORIGINS:
         raise HTTPException(403, "invalid extension origin")
+    extension_policy = await policy_for_organization(employee.organization_code)
+    if extension_policy["version"] and body.policy_engine_version != EXTENSION_POLICY_VERSION:
+        raise HTTPException(426, "Update the extension to apply the active governance policy")
     try:
         decision = await inspect_text(body.text)
     except InspectionUnavailable as exc:
@@ -44,6 +49,7 @@ async def extension_inspect_route(
         "requires_confirmation": decision.action == Action.MASK,
         "policy_version": decision.policy_version,
         "categories": sorted({finding.category.value for finding in decision.findings}),
+        "extension_policy": extension_policy,
     }
 
 

@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; base-uri 'none'; object-src 'none'; form-action 'self'">
   <title>Governança de IA</title>
-  <link rel="stylesheet" href="./portal.css?v=20261119-tv-fit">
+  <link rel="stylesheet" href="./portal.css?v=20261126-policy-editor">
   <script defer src="./markdown-it.min.js?v=20261116-markdown"></script>
-  <script defer src="./app.js?v=20261119-tv-fit"></script>
+  <script defer src="./app.js?v=20261126-policy-editor"></script>
 </head>
 <body>
   <header>
@@ -34,12 +34,18 @@
         <a class="tv-link" href="/tv">Abrir modo TV</a>
         <button type="button" id="logout">Sair</button>
       </div>
+      <nav class="portal-nav" aria-label="Seções da governança">
+        <button type="button" id="nav-overview" data-page-target="overview" aria-current="page">Visão geral</button>
+        <button type="button" id="nav-health" data-page-target="health">Saúde da extensão</button>
+        <button type="button" id="nav-policies" data-page-target="policies">Políticas de IA</button>
+      </nav>
+      <div id="page-overview" class="portal-page" data-page="overview">
       <section class="analytics-overview" aria-labelledby="summary-title"><h3 id="summary-title">Resumo</h3><p id="summary"></p></section>
       <section class="analytics-departments" aria-labelledby="departments-title"><h3 id="departments-title">Departamentos</h3><ul id="departments"></ul></section>
       <section class="analytics-interactions" aria-labelledby="interactions-title">
         <h3 id="interactions-title">Interações</h3>
         <form id="search-form">
-          <label>Departamento <input id="department-code" maxlength="128"></label>
+          <label>Departamento <select id="department-code"><option value="">Todos</option></select></label>
           <label>Código do colaborador <input id="employee-id" maxlength="128"></label>
           <label>Plataforma <select id="platform"><option value="">Todas</option><option value="chatgpt_web">ChatGPT</option><option value="claude_web">Claude</option></select></label>
           <label>De (UTC) <input id="from-date" type="datetime-local"></label>
@@ -77,6 +83,43 @@
           <button type="submit">Redefinir senha temporária</button>
         </form>
       </section>
+      </div>
+      <div id="page-health" class="portal-page" data-page="health" hidden>
+        <section aria-labelledby="health-title">
+          <div class="feature-heading"><div><h3 id="health-title">Atividade de captura hoje</h3><p>Registros recebidos pela extensão no dia de hoje.</p></div><span id="activity-updated" class="status-pill">Carregando</span></div>
+          <div class="health-metrics" aria-label="Atividade de captura hoje">
+            <article><span>Interações</span><strong id="activity-interactions">—</strong></article>
+            <article><span>Respostas completas</span><strong id="activity-complete">—</strong></article>
+            <article><span>Respostas incompletas</span><strong id="activity-incomplete">—</strong></article>
+          </div>
+          <p id="activity-last-event" class="feature-note" role="status" aria-live="polite">Aguardando dados.</p>
+          <p class="feature-note">Este painel mostra interações registradas. O backend não recebe heartbeat, versão instalada nem tamanho de fila; esses estados não podem ser inferidos pela atividade.</p>
+        </section>
+        <section aria-labelledby="backup-health-title">
+          <div class="feature-heading"><div><h3 id="backup-health-title">Backup do PostgreSQL</h3><p>Último upload e prazo de atualização configurados pelo serviço.</p></div><span id="backup-status" class="status-pill status-warn" role="status" aria-live="polite">Consultando</span></div>
+          <div class="backup-summary"><div><span>Último upload concluído</span><strong id="backup-last-success">Sem dado operacional</strong></div></div>
+          <p class="feature-note">O estado vem do marcador de sucesso escrito após o upload ao Cloud Storage. O painel considera o prazo de 97 horas do serviço. A validação com pg_restore não substitui uma restauração isolada; este painel não afirma que a restauração foi testada.</p>
+        </section>
+      </div>
+      <div id="page-policies" class="portal-page" data-page="policies" hidden>
+        <section aria-labelledby="policies-title">
+          <div class="feature-heading"><div><h3 id="policies-title">Políticas de IA</h3><p>Configure o comportamento aplicado em todas as instalações da organização.</p></div><span id="extension-policy-version" class="status-pill" role="status" aria-live="polite">Carregando</span></div>
+          <p id="policy-scope"></p>
+          <p id="policy-action-summary" class="feature-note"></p>
+          <ul id="policy-rules" class="policy-list"></ul>
+          <p id="policy-warning-scope" class="feature-note"></p>
+          <form id="policy-form" class="policy-editor">
+            <h4>Comportamento por regra</h4>
+            <p>“Padrão do motor” usa a regra atual. Atualize as extensões para a versão 0.6.7 antes de alterar regras; depois, a configuração será aplicada em cada inspeção autenticada.</p>
+            <ul id="policy-controls" class="policy-controls"></ul>
+            <button type="submit">Salvar política</button>
+            <span id="policy-save-status" role="status" aria-live="polite"></span>
+          </form>
+          <h4 id="server-policy-version">Inspeção do servidor</h4>
+          <p class="feature-note">A inspeção remota aplica a política abaixo antes de liberar o envio. As decisões por interação não são agregadas pelo backend.</p>
+          <ul id="server-policies" class="policy-list"></ul>
+        </section>
+      </div>
     </section>
     <section id="tv-screen" hidden aria-labelledby="tv-title">
       <div class="tv-shell">
@@ -96,6 +139,7 @@
         </header>
         <div class="tv-meta">
           <span>ChatGPT Web e Claude Web observados pela extensão</span>
+          <span>Backup <strong id="tv-backup-status">Sem dado</strong> · Política <strong id="tv-policy-version">Consultando</strong></span>
           <span><span id="tv-last-event">Último evento: aguardando dados</span> · <span id="tv-last-updated">Atualizando painel...</span></span>
         </div>
         <p id="tv-error" role="status" aria-live="polite"></p>
@@ -108,6 +152,7 @@
         <div id="tv-empty" hidden>Sem interações registradas pela extensão hoje.</div>
         <div class="tv-metrics" aria-label="Indicadores de hoje">
           <article><span>Interações capturadas hoje</span><strong id="tv-interactions">—</strong></article>
+          <article><span>Respostas completas</span><strong id="tv-complete">—</strong></article>
           <article><span>Colaboradores identificados</span><strong id="tv-employees">—</strong></article>
           <article><span>Departamentos com registros</span><strong id="tv-departments-count">—</strong></article>
           <article><span>Respostas incompletas</span><strong id="tv-incomplete">—</strong></article>

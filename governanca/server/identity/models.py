@@ -78,6 +78,18 @@ class InternalSession(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class GovernancePolicyRevision(Base):
+    __tablename__ = "governance_policy_revisions"
+    __table_args__ = (UniqueConstraint("organization_id", "version"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    organization_id: Mapped[UUID] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    actions: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    changed_by: Mapped[UUID] = mapped_column(ForeignKey("employees.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class GovernanceInvestigation(Base):
     __tablename__ = "governance_investigations"
     __table_args__ = (

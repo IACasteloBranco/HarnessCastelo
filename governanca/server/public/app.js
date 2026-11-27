@@ -36,10 +36,26 @@ let accountOperationVersion = 0;
 let detailVersion = 0;
 let interactionVersion = 0;
 let analyticsVersion = 0;
+let activityVersion = 0;
+let backupStatusVersion = 0;
+let policyCatalogVersion = 0;
+let activePolicyVersion = 0;
 let tvRefreshTimer = null;
 let tvHasData = false;
 let tvInteractionVersion = 0;
 function clearDetail() { detailVersion++; $('detail').replaceChildren(); }
+for (const [id, page] of [['nav-overview', 'overview'], ['nav-health', 'health'], ['nav-policies', 'policies']]) {
+  $(id).addEventListener('click', () => {
+    for (const target of ['overview', 'health', 'policies']) {
+      $(`page-${target}`).hidden = target !== page;
+      const tab = $(`nav-${target}`);
+      if (target === page) tab.setAttribute('aria-current', 'page');
+      else tab.removeAttribute('aria-current');
+    }
+    if (page === 'health') { void activityAnalytics(); void backupStatus(); }
+    if (page === 'policies') void policyCatalog();
+  });
+}
 function formatDate(value) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? String(value ?? '') : new Intl.DateTimeFormat('pt-BR', {
@@ -75,8 +91,8 @@ function departmentRows(items) {
     const title = document.createElement('strong');
     title.textContent = String(item.department_name ?? item.department_code ?? '');
     const facts = document.createElement('dl');
-    for (const [label, value] of [['Código', item.department_code], ['Plataforma', item.platform],
-      ['Interações', item.interactions], ['Respostas', item.responses]]) {
+    for (const [label, value] of [['Plataforma', item.platform], ['Interações', item.interactions],
+      ['Respostas', item.responses]]) {
       const group = document.createElement('div');
       const term = document.createElement('dt');
       term.textContent = label;
@@ -141,13 +157,20 @@ async function investigations() {
 async function accountDepartments() {
   try {
     const result = await api('/api/auth/governance/departments');
-    const select = $('account-department');
-    select.replaceChildren();
-    for (const department of result.departments) {
-      const option = document.createElement('option');
-      option.value = department.code;
-      option.textContent = `${department.name} (${department.code})`;
-      select.append(option);
+    for (const [id, firstLabel] of [['account-department', 'Selecione um departamento'],
+      ['department-code', 'Todos']]) {
+      const select = $(id);
+      select.replaceChildren();
+      const first = document.createElement('option');
+      first.value = '';
+      first.textContent = firstLabel;
+      select.append(first);
+      for (const department of result.departments) {
+        const option = document.createElement('option');
+        option.value = department.code;
+        option.textContent = department.name;
+        select.append(option);
+      }
     }
   } catch (error) { errorMessage(error); }
 }
@@ -175,6 +198,126 @@ async function analytics() {
     departmentRows(departments.departments);
     await interactions();
   } catch (error) { errorMessage(error); }
+}
+async function activityAnalytics() {
+  const version = ++activityVersion;
+  try {
+    const summary = await api(`/api/capture/v1/admin/analytics/summary?${todayParams()}`);
+    if (version !== activityVersion || $('portal-screen').hidden) return;
+    const totals = summary.totals;
+    $('activity-interactions').textContent = new Intl.NumberFormat('pt-BR').format(totals.interactions);
+    $('activity-complete').textContent = new Intl.NumberFormat('pt-BR').format(totals.complete_responses);
+    $('activity-incomplete').textContent = new Intl.NumberFormat('pt-BR').format(totals.incomplete_responses);
+    const lastActivity = (summary.by_department || []).map(item => item.last_activity_at)
+      .filter(Boolean).sort().at(-1);
+    $('activity-last-event').textContent = lastActivity
+      ? `Última atividade registrada hoje: ${formatDate(lastActivity)}.`
+      : 'Nenhuma atividade de captura registrada hoje.';
+    $('activity-updated').textContent = `Atualizado às ${new Intl.DateTimeFormat('pt-BR', {
+      timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit',
+    }).format(new Date())}`;
+  } catch {
+    if (version !== activityVersion || $('portal-screen').hidden) return;
+    $('activity-updated').textContent = 'Indisponível';
+    $('activity-last-event').textContent = 'Não foi possível consultar a atividade de captura.';
+  }
+}
+async function backupStatus(tv = false) {
+  const version = ++backupStatusVersion;
+  const statusId = tv ? 'tv-backup-status' : 'backup-status';
+  try {
+    const result = await api('/api/auth/governance/backup-status');
+    if (version !== backupStatusVersion || (tv ? $('tv-screen').hidden : $('portal-screen').hidden)) return;
+    const label = result.state === 'fresh' ? (tv ? 'Recente' : 'Último sucesso dentro de 97 horas')
+      : result.state === 'stale' ? 'Atrasado' : 'Sem dado operacional';
+    $(statusId).textContent = label;
+    $(statusId).className = `status-pill ${result.state === 'fresh' ? 'status-ok' : 'status-warn'}`;
+    const lastSuccess = result.last_success_at ? formatDate(result.last_success_at) : 'Sem registro disponível';
+    if (tv) $('tv-backup-status').textContent = `${label} · ${lastSuccess}`;
+    else $('backup-last-success').textContent = lastSuccess;
+  } catch {
+    if (version !== backupStatusVersion) return;
+    $(statusId).textContent = 'Consulta indisponível';
+    if (!tv) $('backup-last-success').textContent = 'Não foi possível consultar o serviço.';
+  }
+}
+function policyAction(action) {
+  return ({allow: 'Permitido', mask: 'Mascarado', block: 'Bloqueado'})[action] || 'Revisar';
+}
+async function policyCatalog(tv = false) {
+  const version = ++policyCatalogVersion;
+  try {
+    const result = await api('/api/auth/governance/policies');
+    if (version !== policyCatalogVersion || (tv ? $('tv-screen').hidden : $('portal-screen').hidden)) return;
+    if (tv) {
+      $('tv-policy-version').textContent = `política v${result.extension.policy_version ?? 0} · servidor ${result.server_inspection.version}`;
+      return;
+    }
+    const extension = result.extension;
+    extension.configured_actions ||= {};
+    activePolicyVersion = extension.policy_version ?? 0;
+    $('extension-policy-version').textContent = `Política v${activePolicyVersion} · motor ${extension.version}`;
+    $('policy-scope').textContent = `Regras R01–R09 e limite de análise. O motor registra decisões somente nesta instalação da extensão; o backend não recebe contagens.`;
+    const actionDescription = {ALLOW: 'permite o envio', WARN: 'avisa e permite continuar',
+      REVIEW: 'interrompe o envio para revisão local', BLOCK: 'impede o envio'};
+    $('policy-action-summary').textContent = extension.actions.map(action => actionDescription[action] || action).join(' · ');
+    $('policy-warning-scope').textContent = `Destino atual: ${extension.destination}. Os avisos de ${extension.warning_rules.join(' e ')} só se aplicam a destinos aprovados e não estão ativos neste fluxo.`;
+    const rules = $('policy-rules');
+    rules.replaceChildren();
+    for (const item of extension.rules) {
+      const row = document.createElement('li');
+      const configured = extension.configured_actions[item.id];
+      row.textContent = `${item.id} · ${item.label}: ${configured || item.effect}`;
+      rules.append(row);
+    }
+    const controls = $('policy-controls');
+    controls.replaceChildren();
+    for (const item of extension.rules.filter(rule => rule.id !== 'LIMIT')) {
+      const row = document.createElement('li');
+      const label = document.createElement('label');
+      label.textContent = `${item.id} · ${item.label}`;
+      const select = document.createElement('select');
+      select.dataset.rule = item.id;
+      for (const [value, text] of [['', 'Padrão do motor'], ...extension.actions.map(action => [action, actionDescription[action] || action])]) {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = text;
+        option.selected = (extension.configured_actions[item.id] || '') === value;
+        select.append(option);
+      }
+      label.append(select);
+      row.append(label);
+      controls.append(row);
+    }
+    const remote = result.server_inspection;
+    $('server-policy-version').textContent = `Inspeção do servidor (código) · ${remote.version}`;
+    const categories = $('server-policies');
+    categories.replaceChildren();
+    for (const item of remote.categories) {
+      const row = document.createElement('li');
+      row.textContent = `${item.name}: ${policyAction(item.action)}`;
+      categories.append(row);
+    }
+  } catch {
+    if (version !== policyCatalogVersion) return;
+    if (tv) $('tv-policy-version').textContent = 'Indisponível';
+    else $('extension-policy-version').textContent = 'Consulta indisponível';
+  }
+}
+async function savePolicy(event) {
+  event.preventDefault();
+  const actions = Object.fromEntries([...$('policy-controls').querySelectorAll('select')]
+    .map(select => [select.dataset.rule, select.value || null]));
+  try {
+    const saved = await api('/api/auth/governance/policies', {method: 'PUT', body: JSON.stringify({
+      expected_version: activePolicyVersion, actions,
+    })});
+    activePolicyVersion = saved.version;
+    $('policy-save-status').textContent = `Política v${saved.version} salva e auditada.`;
+    await policyCatalog();
+  } catch (error) {
+    $('policy-save-status').textContent = error.message;
+  }
 }
 function todayParams() {
   const timeZone = 'America/Sao_Paulo';
@@ -246,6 +389,7 @@ async function tvDashboard() {
     }));
 
     $('tv-interactions').textContent = new Intl.NumberFormat('pt-BR').format(totals.interactions);
+    $('tv-complete').textContent = new Intl.NumberFormat('pt-BR').format(totals.complete_responses);
     $('tv-employees').textContent = new Intl.NumberFormat('pt-BR').format(totals.employees);
     $('tv-departments-count').textContent = new Intl.NumberFormat('pt-BR').format(totals.departments);
     $('tv-incomplete').textContent = new Intl.NumberFormat('pt-BR').format(totals.incomplete_responses);
@@ -310,12 +454,17 @@ async function session() {
     else if (me.role === 'governance') {
       if (requestedTv || location.pathname === '/tv') {
         show('tv');
-        await tvDashboard();
+        await Promise.all([tvDashboard(), backupStatus(true), policyCatalog(true)]);
         clearInterval(tvRefreshTimer);
-        tvRefreshTimer = setInterval(() => { if (!document.hidden && location.pathname === '/tv') void tvDashboard(); }, 30 * 60_000);
+        tvRefreshTimer = setInterval(() => {
+          if (!document.hidden && location.pathname === '/tv') {
+            void tvDashboard(); void backupStatus(true); void policyCatalog(true);
+          }
+        }, 30 * 60_000);
       } else {
         show('portal');
         await analytics();
+        await activityAnalytics();
         await investigations();
         await accountDepartments();
       }
@@ -336,6 +485,7 @@ $('login-form').addEventListener('submit', async event => {
     else await session();
   } catch (error) { errorMessage(error); }
 });
+$('policy-form').addEventListener('submit', savePolicy);
 $('search-form').addEventListener('submit', async event => {
   event.preventDefault();
   clearDetail();
@@ -429,12 +579,20 @@ $('logout').addEventListener('click', async () => {
     activeCase = null;
     interactionVersion++;
     analyticsVersion++;
+    activityVersion++;
+    backupStatusVersion++;
+    policyCatalogVersion++;
     clearDetail();
-    for (const id of ['summary', 'interaction-count', 'active-case', 'message']) $(id).textContent = '';
+    for (const id of ['summary', 'interaction-count', 'active-case', 'message', 'activity-interactions',
+      'activity-complete', 'activity-incomplete', 'activity-last-event', 'activity-updated']) $(id).textContent = '';
     for (const id of ['departments', 'interactions', 'investigations']) $(id).replaceChildren();
     temporaryPassword = '';
     $('account-result').textContent = '';
     $('copy-temporary-password').hidden = true;
+    for (const id of ['backup-status', 'backup-last-success', 'extension-policy-version', 'policy-scope',
+      'policy-warning-scope', 'server-policy-version', 'tv-backup-status', 'tv-policy-version']) $(id).textContent = '';
+    $('policy-rules').replaceChildren();
+    $('server-policies').replaceChildren();
     show('login');
   } catch (error) { errorMessage(error); }
 });
@@ -449,8 +607,12 @@ $('tv-logout').addEventListener('click', async () => {
   try {
     await api('/api/auth/logout', {method: 'POST'});
     clearInterval(tvRefreshTimer);
+    backupStatusVersion++;
+    policyCatalogVersion++;
     $('tv-interactions-list').replaceChildren();
     $('tv-content-status').textContent = '';
+    $('tv-backup-status').textContent = '';
+    $('tv-policy-version').textContent = '';
     show('login');
   } catch (error) { errorMessage(error); }
 });

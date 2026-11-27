@@ -11,7 +11,14 @@ function element() {
     addEventListener(type, fn) { this.listeners[type] = fn; },
     replaceChildren(...nodes) { this.children = nodes; this.textContent = ''; this.value = ''; },
     append(...nodes) { this.children.push(...nodes); },
+    querySelectorAll(selector) {
+      const matches = [];
+      const visit = node => { if (selector === 'select' && node.tagName === 'select') matches.push(node); node.children?.forEach(visit); };
+      this.children.forEach(visit);
+      return matches;
+    },
     setAttribute(name, value) { this[name] = value; },
+    removeAttribute(name) { delete this[name]; },
     reset() { this.value = ''; },
     async fire(type) { return this.listeners[type]({ preventDefault() {}, currentTarget: this }); },
   };
@@ -29,13 +36,16 @@ async function portal(responses, pathname = '/', confirmResult = true) {
       if (id === 'tv-department' && !target.children.length) target.append(Object.assign(element(), { value: '', textContent: 'Todos' }));
       return target;
     },
-    createElement() { return element(); },
+    createElement(tagName) { return Object.assign(element(), { tagName }); },
   };
   const fetch = async (url, options = {}) => {
     calls.push({ url, options });
     const result = responses[url] ?? Object.entries(responses).sort(([a], [b]) => b.length - a.length)
       .find(([key]) => url.startsWith(key))?.[1] ??
-      (url === '/api/auth/governance/departments' ? { departments: [] } : undefined);
+      (url === '/api/auth/governance/departments' ? { departments: [] } :
+        url === '/api/auth/governance/backup-status' ? { state: 'unknown', last_success_at: null } :
+      url === '/api/auth/governance/policies' ? { extension: { version: '0.1.2', destination: 'not_approved', rules: [], decision_counts: 'local_only', warning_rules: ['R05', 'R06'] },
+            server_inspection: { version: 'governanca-2', categories: [] } } : undefined);
     const value = typeof result === 'function' ? await result(options) : result;
     if (value === undefined) throw Error(`Unexpected request: ${url}`);
     return { ok: typeof value.status !== 'number' || value.status < 400,
@@ -89,7 +99,7 @@ test('analytics renders only metadata as text and filters interactions', async (
   assert.equal(department.children[0].textContent, '<img src=x onerror=alert(1)>');
   assert.deepEqual(department.children[1].children.map(group =>
     group.children.map(cell => cell.textContent)), [
-    ['Código', 'FIN'], ['Plataforma', 'chatgpt_web'], ['Interações', '3'], ['Respostas', '2'],
+    ['Plataforma', 'chatgpt_web'], ['Interações', '3'], ['Respostas', '2'],
   ]);
   p.el('department-code').value = 'FIN';
   await p.el('search-form').fire('submit');
@@ -213,10 +223,13 @@ test('a password reset response arriving after logout does not reveal the tempor
 test('TV dashboard loads prompts and responses with employee and department', async () => {
   const p = await portal({
     '/api/auth/me': { role: 'governance', must_change_password: false },
-    '/api/capture/v1/admin/analytics/tv': { totals: { interactions: 1, employees: 1, departments: 1,
+    '/api/auth/governance/backup-status': { state: 'fresh', last_success_at: '2026-11-26T02:55:00Z' },
+    '/api/auth/governance/policies': { extension: { version: '0.1.2' },
+      server_inspection: { version: 'governanca-2' } },
+    '/api/capture/v1/admin/analytics/tv': { totals: { interactions: 1, complete_responses: 1, employees: 1, departments: 1,
       incomplete_responses: 0, last_activity_at: null },
       by_department: [{ department_code: 'FIN', department_name: 'Fiscal', interactions: 1 }], by_platform: [] },
-    '/api/capture/v1/admin/analytics/tv?department_code=FIN': { totals: { interactions: 1, employees: 1, departments: 1,
+    '/api/capture/v1/admin/analytics/tv?department_code=FIN': { totals: { interactions: 1, complete_responses: 1, employees: 1, departments: 1,
       incomplete_responses: 0, last_activity_at: null },
       by_department: [{ department_code: 'FIN', department_name: 'Fiscal', interactions: 1 }], by_platform: [] },
     '/api/capture/v1/admin/analytics/tv-interactions': { items: [{ employee_id: 'CB-1', person_name: 'Pessoa teste',
@@ -238,13 +251,97 @@ test('TV dashboard loads prompts and responses with employee and department', as
   assert.ok(p.calls.some(call => call.url.startsWith('/api/capture/v1/admin/analytics/tv?') && call.url.includes('department_code=FIN')));
   assert.ok(p.calls.some(call => call.url.includes('/api/capture/v1/admin/analytics/tv-interactions?department_code=FIN')), JSON.stringify(p.calls.map(call => call.url)));
   assert.equal(p.el('tv-interactions').textContent, '1');
+  assert.equal(p.el('tv-complete').textContent, '1');
+  assert.match(p.el('tv-backup-status').textContent, /Recente/);
+  assert.match(p.el('tv-policy-version').textContent, /política v0.*governanca-2/);
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
   assert.doesNotMatch(html, /tv-request-content|Solicitar exibição/);
 });
 
-test('governance portal uses a new cache key for its migrated application script', () => {
+test('governance portal uses a new cache key for its application script', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
-  assert.match(html, /app\.js\?v=20261119-tv-fit/);
+  assert.match(html, /app\.js\?v=20261126-policy-editor/);
+});
+
+test('governance navigation buttons and pages match the ids used by the app', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+  for (const id of ['nav-overview', 'nav-health', 'nav-policies', 'page-overview', 'page-health', 'page-policies']) {
+    assert.match(html, new RegExp(`id="${id}"`));
+  }
+});
+
+test('health view uses real daily capture totals and hides department codes', async () => {
+  const p = await portal({
+    '/api/auth/me': { role: 'governance', must_change_password: false },
+    '/api/capture/v1/admin/analytics/summary': { totals: { interactions: 2, responses: 2 } },
+    '/api/capture/v1/admin/analytics/summary?': {
+      totals: { interactions: 4, complete_responses: 3, incomplete_responses: 1 },
+      by_department: [{ department_code: 'FIN-SECRET', department_name: 'Fiscal', last_activity_at: '2026-11-26T02:55:00Z' }],
+    },
+    '/api/capture/v1/admin/analytics/departments': { departments: [] },
+    '/api/capture/v1/admin/analytics/interactions': { items: [], total: 0 },
+    '/api/auth/governance/departments': { departments: [{ code: 'FIN-SECRET', name: 'Fiscal' }] },
+    '/api/governance/investigations': { investigations: [] },
+  });
+  assert.equal(p.el('activity-interactions').textContent, '4');
+  assert.equal(p.el('activity-complete').textContent, '3');
+  assert.equal(p.el('activity-incomplete').textContent, '1');
+  assert.match(p.el('activity-last-event').textContent, /Última atividade registrada hoje/);
+  assert.equal(p.el('department-code').children[1].textContent, 'Fiscal');
+  assert.equal(p.el('department-code').children[1].value, 'FIN-SECRET');
+  assert.doesNotMatch(fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8'), /25 nov 2026|8 exemplos|50 instalações fictícias|v1 · aprovada/);
+});
+
+test('health and policy views render authenticated backend status and policy sources', async () => {
+  const p = await portal({
+    '/api/auth/me': { role: 'governance', must_change_password: false },
+    '/api/capture/v1/admin/analytics/summary': { totals: { interactions: 0, responses: 0 } },
+    '/api/auth/governance/backup-status': { state: 'fresh', last_success_at: '2026-11-26T02:55:00Z' },
+    '/api/auth/governance/policies': {
+      extension: { version: '0.1.2', destination: 'not_approved', actions: ['ALLOW', 'WARN', 'REVIEW', 'BLOCK'],
+        warning_rules: ['R05', 'R06'], decision_counts: 'local_only',
+        rules: [{ id: 'R01', label: 'Chave privada', effect: 'Bloqueia o envio.' }] },
+      server_inspection: { version: 'governanca-2', categories: [{ name: 'CNPJ', action: 'allow' }, { name: 'CPF', action: 'mask' }] },
+    },
+    '/api/capture/v1/admin/analytics/departments': { departments: [] },
+    '/api/capture/v1/admin/analytics/interactions': { items: [], total: 0 },
+    '/api/auth/governance/departments': { departments: [] },
+    '/api/governance/investigations': { investigations: [] },
+  });
+  await p.el('nav-health').fire('click');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(p.el('backup-status').textContent, 'Último sucesso dentro de 97 horas');
+  assert.match(p.el('backup-last-success').textContent, /25\/11\/2026/);
+  await p.el('nav-policies').fire('click');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(p.el('extension-policy-version').textContent, 'Política v0 · motor 0.1.2');
+  assert.match(p.el('policy-action-summary').textContent, /avisa e permite continuar/);
+  assert.match(p.el('policy-rules').children[0].textContent, /R01.*Chave privada.*Bloqueia/);
+  assert.match(p.el('server-policy-version').textContent, /governanca-2/);
+  assert.match(p.el('server-policies').children.map(item => item.textContent).join(' '), /CNPJ.*Permitido.*CPF.*Mascarado/);
+});
+
+test('governance can save behavior changes with the current policy version', async () => {
+  const actions = Object.fromEntries(Array.from({ length: 9 }, (_, index) => [`R${String(index + 1).padStart(2, '0')}`, null]));
+  let savedBody;
+  const p = await portal({
+    '/api/auth/me': { role: 'governance', must_change_password: false },
+    '/api/auth/governance/policies': async options => {
+      if (options.method === 'PUT') { savedBody = JSON.parse(options.body); return { version: 5, actions: savedBody.actions }; }
+      return { extension: { version: '0.1.2', policy_version: 4, configured_actions: actions,
+        actions: ['ALLOW', 'WARN', 'REVIEW', 'BLOCK'], destination: 'not_approved', warning_rules: [],
+        decision_counts: 'local_only', rules: [{ id: 'R01', label: 'Chave privada', effect: 'Bloqueia o envio.' }] },
+        server_inspection: { version: 'governanca-2', categories: [] } };
+    },
+  });
+  await p.el('nav-policies').fire('click');
+  await new Promise(resolve => setImmediate(resolve));
+  const select = p.el('policy-controls').querySelectorAll('select')[0];
+  select.value = 'WARN';
+  await p.el('policy-form').fire('submit');
+  assert.equal(savedBody.expected_version, 4);
+  assert.equal(savedBody.actions.R01, 'WARN');
+  assert.equal(p.el('policy-save-status').textContent, 'Política v5 salva e auditada.');
 });
 
 test('first-login document owns the password-change forms and links back to governance', () => {

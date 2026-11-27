@@ -60,6 +60,22 @@ def upload(path: Path, bucket: str, name: str, storage_class: str) -> None:
         connection.close()
 
 
+def write_status_marker(path: Path, timestamp: datetime) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="ascii", dir=path.parent, prefix="last-success-", delete=False
+        ) as marker:
+            temporary = Path(marker.name)
+            marker.write(timestamp.isoformat())
+        os.chmod(temporary, 0o644)
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
 def main() -> None:
     state = Path(os.environ.get("STATE_DIRECTORY", "/var/lib/governanca-backup"))
     now = datetime.now(timezone.utc)
@@ -95,6 +111,13 @@ def main() -> None:
         if tier in ("monthly", "weekly"):
             (state / "last-weekly").write_text(week)
         (state / "last-success").write_text(now.isoformat())
+        try:
+            marker_path = Path(os.environ.get(
+                "GOVERNANCA_BACKUP_STATUS_FILE", str(state / "status" / "last-success")
+            ))
+            write_status_marker(marker_path, now)
+        except OSError:
+            print("BACKUP_STATUS_EXPORT_FAILED", file=sys.stderr, flush=True)
         print(f"BACKUP_OK gs://{bucket}/{name} ({archive.stat().st_size} bytes, {storage_class})", flush=True)
     finally:
         archive.unlink(missing_ok=True)

@@ -18,7 +18,7 @@ O bucket e os papéis da nova conta foram criados manualmente. Não repita os co
 
 ### Próxima sequência
 
-1. Revise e integre `codex/governanca-backup` à `main` pelo GitHub. Atualize a VM com `git pull --ff-only origin main`.
+1. Atualize a VM com `git pull --ff-only origin main` e confirme que o código implantado inclui o serviço de backup.
 2. Na janela de manutenção, pare a VM e anexe `governanca-vm@psyched-edge-511720-s5.iam.gserviceaccount.com`, conforme os comandos abaixo. Inicie a VM e confirme que a extensão ainda consegue inspecionar texto pelo SDP e que o Ops Agent está ativo.
 3. Instale o script e os arquivos systemd pela seção [Instalar na VM](#2-instalar-na-vm). Execute um backup manual antes de habilitar os timers.
 4. Acrescente a configuração do Ops Agent sem apagar as configurações existentes e crie o alerta de e-mail pela seção [Logs, alertas e restauração](#3-logs-alertas-e-restauração).
@@ -26,6 +26,8 @@ O bucket e os papéis da nova conta foram criados manualmente. Não repita os co
 6. Restaure uma cópia mensal em PostgreSQL 17 isolado e registre o resultado. Só então considere a recuperação validada.
 
 O trabalho ainda não está concluído. O passo que causa indisponibilidade é parar a VM para trocar sua conta de serviço; faça isso numa janela de manutenção. A implantação, os primeiros logs, o primeiro backup e a restauração dependem de comandos executados na GCP e ainda precisam de evidência.
+
+O painel autenticado da Governança lê somente `/run/governanca-backup-status/last-success`, um marcador com o horário do último upload concluído. O serviço o publica com leitura local, sem expor o diretório privado de estado, os logs ou os dumps. Se a aplicação rodar em container, monte esse arquivo como somente leitura; configure `GOVERNANCA_BACKUP_STATUS_FILE` com o caminho visível para a aplicação. Ausência do marcador, inclusive após reiniciar a VM e antes do próximo backup, aparece como estado desconhecido. O painel não comprova restauração isolada.
 
 | Cópia | Classe no upload | Exclusão por ciclo de vida |
 | --- | --- | --- |
@@ -95,6 +97,8 @@ sudo systemctl status governanca-backup.service --no-pager
 sudo systemctl enable --now governanca-backup.timer governanca-backup-check.timer
 systemctl list-timers 'governanca-backup*'
 ```
+
+O serviço cria `/run/governanca-backup-status/last-success` após o upload bem-sucedido. Se o processo web não rodar na VM, monte esse único arquivo como somente leitura e defina `GOVERNANCA_BACKUP_STATUS_FILE` no ambiente do servidor web. Não conceda ao processo web acesso a `/var/lib/governanca-backup` nem aos arquivos de dump.
 
 O processo roda como `postgres`, usa autenticação local do PostgreSQL e obtém credenciais temporárias no metadata server da VM. Ele valida a estrutura do arquivo com `pg_restore --list`, envia o arquivo por HTTPS com verificação `Content-MD5` e impede sobrescrita no Cloud Storage. O arquivo temporário local é removido ao terminar. O serviço registra `BACKUP_OK` ou `BACKUP_FAILED` em `/var/log/governanca-backup/backup.log`; a checagem diária às 03h registra falha se não houve upload bem-sucedido por 97 horas.
 
