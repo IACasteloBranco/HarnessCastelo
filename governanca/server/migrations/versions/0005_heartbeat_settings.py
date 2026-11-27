@@ -2,7 +2,7 @@
 from alembic import op
 import sqlalchemy as sa
 
-revision = "governanca_0005_heartbeat_settings"
+revision = "governanca_0005_heartbeat"
 down_revision = "governanca_0004_dlp_policy"
 branch_labels = None
 depends_on = None
