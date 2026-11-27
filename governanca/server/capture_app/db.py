@@ -10,7 +10,7 @@ from psycopg.rows import dict_row
 
 from .settings import Settings
 
-SCHEMA_VERSION = "1.2"
+SCHEMA_VERSION = "1.3"
 
 
 def utc_now() -> datetime:
@@ -95,6 +95,12 @@ def _create_employee_views(db: Any) -> None:
         WHERE employee.role IN ('collaborator', 'auditor', 'governance')""")
 
 
+def _add_machine_health_columns(db: Any) -> None:
+    db.execute("ALTER TABLE machines ADD COLUMN IF NOT EXISTS last_seen_at TEXT")
+    db.execute("ALTER TABLE machines ADD COLUMN IF NOT EXISTS extension_version TEXT")
+    db.execute("ALTER TABLE machines ADD COLUMN IF NOT EXISTS capture_enabled SMALLINT")
+
+
 def _initialize_postgres(db: Any) -> None:
     db.execute("SELECT pg_advisory_xact_lock(hashtext(?))", ("governanca-schema",))
     db.execute("CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, applied_at TEXT NOT NULL)")
@@ -112,6 +118,12 @@ def _initialize_postgres(db: Any) -> None:
         }
         if not required.issubset(existing_tables):
             raise RuntimeError("PostgreSQL schema version does not match its tables")
+        machine_columns = {row["column_name"] for row in db.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema = current_schema() AND table_name = 'machines'"
+        ).fetchall()}
+        if not {"last_seen_at", "extension_version", "capture_enabled"}.issubset(machine_columns):
+            raise RuntimeError("PostgreSQL machine health columns are missing")
         existing_views = {
             row["table_name"] for row in db.execute(
                 "SELECT table_name FROM information_schema.views WHERE table_schema = current_schema()"
@@ -134,12 +146,14 @@ def _initialize_postgres(db: Any) -> None:
             raise RuntimeError("PostgreSQL shared employee views are missing")
         _create_employee_views(db)
         return
-    if "1.1" in applied:
+    if "1.2" in applied or "1.1" in applied:
+        _add_machine_health_columns(db)
         _create_employee_views(db)
         db.execute("INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                    (SCHEMA_VERSION, iso(utc_now())))
         return
     if "1.0" in applied:
+        _add_machine_health_columns(db)
         db.execute("""CREATE OR REPLACE VIEW departments AS
             SELECT code AS department_code, name AS department_name, 1::SMALLINT AS active,
                    created_at AS created_at, created_at AS updated_at, id AS department_id, organization_id
@@ -162,7 +176,8 @@ def _initialize_postgres(db: Any) -> None:
             installation_id TEXT PRIMARY KEY, public_key_json TEXT NOT NULL, key_fingerprint TEXT NOT NULL,
             person_name TEXT, project_id TEXT, created_at TEXT NOT NULL, assigned_at TEXT,
             requested_employee_id TEXT, requested_at TEXT, employee_id TEXT, department_code TEXT,
-            google_sub TEXT, revoked_at TEXT
+            google_sub TEXT, revoked_at TEXT, last_seen_at TEXT, extension_version TEXT,
+            capture_enabled SMALLINT CHECK (capture_enabled IN (0, 1))
         )""",
         """CREATE VIEW departments AS
             SELECT code AS department_code, name AS department_name, 1::SMALLINT AS active,
@@ -448,6 +463,11 @@ def initialize(settings: Settings) -> None:
         for name in ("google_sub", "revoked_at"):
             if name not in machine_columns:
                 db.execute(f"ALTER TABLE machines ADD COLUMN {name} TEXT")
+        machine_columns = {row["name"] for row in db.execute("PRAGMA table_info(machines)")}
+        for name, declaration in (("last_seen_at", "TEXT"), ("extension_version", "TEXT"),
+                                  ("capture_enabled", "INTEGER")):
+            if name not in machine_columns:
+                db.execute(f"ALTER TABLE machines ADD COLUMN {name} {declaration}")
         db.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES ('0.7', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))")
         db.executescript(
             """
@@ -483,6 +503,7 @@ def initialize(settings: Settings) -> None:
             VALUES ('1.0', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
             """
         )
+        db.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES ('1.3', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))")
 
 
 def json_dump(value: Any) -> str:

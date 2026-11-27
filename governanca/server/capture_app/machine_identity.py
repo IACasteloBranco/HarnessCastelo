@@ -109,13 +109,16 @@ async def verify_machine_signature(request: Request, settings: Settings) -> Mach
     except (InvalidSignature, ValueError) as error:
         raise HTTPException(status_code=401, detail="Invalid machine signature") from error
     with connect(settings) as db:
-        begin_write(db, "machine_nonces")
-        db.execute("DELETE FROM machine_nonces WHERE expires_at <= ?", (iso(utc_now()),))
+        now = utc_now()
+        begin_write(db, "machine_nonces", "machines")
+        db.execute("DELETE FROM machine_nonces WHERE expires_at <= ?", (iso(now),))
         if db.execute("SELECT 1 FROM machine_nonces WHERE installation_id = ? AND nonce = ?",
                       (identifier, nonce)).fetchone():
             raise HTTPException(status_code=409, detail="Machine request already used")
         db.execute("INSERT INTO machine_nonces(installation_id, nonce, expires_at) VALUES (?, ?, ?)",
-                   (identifier, nonce, iso(utc_now() + timedelta(minutes=10))))
+                   (identifier, nonce, iso(now + timedelta(minutes=10))))
+        db.execute("UPDATE machines SET last_seen_at = ? WHERE installation_id = ? AND revoked_at IS NULL",
+                   (iso(now), identifier))
     return Machine(identifier, row["person_name"], row["key_fingerprint"],
                    row["employee_id"], row["department_code"], row["google_sub"])
 

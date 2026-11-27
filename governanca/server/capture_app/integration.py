@@ -16,6 +16,7 @@ CAPTURE_PATHS = {
     "/v1/admin/analytics/tv",
     "/v1/admin/analytics/tv-interactions",
     "/v1/admin/machines/assignment-requests",
+    "/v1/admin/machines/health",
     "/v1/admin/machines/{installation_id}/assignment-request/approve",
     "/v1/admin/machines/{installation_id}/assignment-request/reject",
     "/v1/artifact-metadata",
@@ -26,13 +27,14 @@ CAPTURE_PATHS = {
     "/v1/interactions/{interaction_id}/response",
     "/v1/machines",
     "/v1/machines/{installation_id}",
+    "/v1/machines/{installation_id}/health",
     "/v1/machines/{installation_id}/assignment-request",
     "/v1/stream-captures",
     "/v1/stream-captures/recent",
 }
 
 
-def capture_app(*, protect_content: Callable[[str], Awaitable[str]] | None = None) -> FastAPI:
+def capture_app(*, protect_content: Callable[[str, str], Awaitable[str]] | None = None) -> FastAPI:
     from .main import app as legacy_app
 
     embedded = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)

@@ -1,11 +1,12 @@
-"""Governance-managed extension actions and the immutable server policy."""
+"""Governance-managed extension and server inspection actions."""
 
 from datetime import datetime, timezone
 from uuid import uuid4
 
 from sqlalchemy import select
 
-from governanca.server.inspection import policy_configuration
+from governanca.server.data_protection import Action
+from governanca.server.inspection import DEFAULT_SERVER_ACTIONS, policy_configuration
 from governanca.server.identity.database import session_factory
 from governanca.server.identity.models import GovernancePolicyRevision, Organization
 
@@ -25,11 +26,12 @@ _EXTENSION_RULES = [
 ]
 EDITABLE_RULES = tuple(f"R{number:02}" for number in range(1, 10))
 EDITABLE_ACTIONS = ("ALLOW", "WARN", "REVIEW", "BLOCK")
+EDITABLE_SERVER_ACTIONS = tuple(action.value for action in Action)
 
 
 def _snapshot(version=0, actions=None):
     actions = actions or {rule: None for rule in EDITABLE_RULES}
-    return {"version": version, "actions": actions}
+    return {"version": version, "extension_engine_version": 0, "actions": actions}
 
 
 async def policy_for_organization(organization_code: str) -> dict:
@@ -38,10 +40,25 @@ async def policy_for_organization(organization_code: str) -> dict:
         revision = await session.scalar(select(GovernancePolicyRevision).where(
             GovernancePolicyRevision.organization_id == organization_id
         ).order_by(GovernancePolicyRevision.version.desc()).limit(1)) if organization_id else None
-    return _snapshot(revision.version, revision.actions) if revision else _snapshot()
+    return _snapshot(revision.version, revision.actions) | {
+        "extension_engine_version": revision.extension_engine_version,
+    } if revision else _snapshot()
 
 
-async def save_policy(organization_code: str, employee_id, expected_version: int, actions: dict) -> dict:
+async def server_policy_for_organization(organization_code: str) -> dict:
+    async with session_factory()() as session:
+        organization_id = await session.scalar(select(Organization.id).where(Organization.code == organization_code))
+        revision = await session.scalar(select(GovernancePolicyRevision).where(
+            GovernancePolicyRevision.organization_id == organization_id
+        ).order_by(GovernancePolicyRevision.version.desc()).limit(1)) if organization_id else None
+    return {
+        "version": revision.version if revision else 0,
+        "actions": revision.server_actions if revision and revision.server_actions else DEFAULT_SERVER_ACTIONS.copy(),
+    }
+
+
+async def save_policy(organization_code: str, employee_id, expected_version: int, actions: dict,
+                      server_actions: dict | None = None) -> dict:
     async with session_factory()() as session, session.begin():
         organization = await session.scalar(select(Organization).where(
             Organization.code == organization_code
@@ -54,16 +71,27 @@ async def save_policy(organization_code: str, employee_id, expected_version: int
         version = current.version if current else 0
         if version != expected_version:
             raise RuntimeError("policy version conflict")
+        extension_engine_version = current.extension_engine_version if current else 0
+        previous_actions = current.actions if current else _snapshot()["actions"]
+        if actions != previous_actions:
+            extension_engine_version += 1
         revision = GovernancePolicyRevision(
             id=uuid4(), organization_id=organization.id, version=version + 1,
-            actions=actions, changed_by=employee_id, created_at=datetime.now(timezone.utc),
+            extension_engine_version=extension_engine_version,
+            actions=actions,
+            server_actions=(server_actions or (current.server_actions if current and current.server_actions
+                                               else DEFAULT_SERVER_ACTIONS.copy())),
+            changed_by=employee_id, created_at=datetime.now(timezone.utc),
         )
         session.add(revision)
-    return _snapshot(revision.version, revision.actions)
+    return _snapshot(revision.version, revision.actions) | {
+        "extension_engine_version": revision.extension_engine_version,
+    }
 
 
-def get_policy_catalog(policy=None) -> dict:
+def get_policy_catalog(policy=None, server_policy=None) -> dict:
     policy = policy or _snapshot()
+    server_policy = server_policy or {"version": 0, "actions": DEFAULT_SERVER_ACTIONS}
     return {
         "extension": {
             "version": EXTENSION_POLICY_VERSION,
@@ -75,5 +103,5 @@ def get_policy_catalog(policy=None) -> dict:
             "rules": _EXTENSION_RULES,
             "decision_counts": "local_only",
         },
-        "server_inspection": policy_configuration(),
+        "server_inspection": policy_configuration(server_policy["actions"], server_policy["version"]),
     }

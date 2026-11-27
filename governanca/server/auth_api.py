@@ -37,10 +37,10 @@ async def extension_inspect_route(
     if request.headers.get("Origin") not in EXTENSION_ORIGINS:
         raise HTTPException(403, "invalid extension origin")
     extension_policy = await policy_for_organization(employee.organization_code)
-    if extension_policy["version"] and body.policy_engine_version != EXTENSION_POLICY_VERSION:
+    if extension_policy.get("extension_engine_version", 0) and body.policy_engine_version != EXTENSION_POLICY_VERSION:
         raise HTTPException(426, "Update the extension to apply the active governance policy")
     try:
-        decision = await inspect_text(body.text)
+        decision = await inspect_text(body.text, employee.organization_code)
     except InspectionUnavailable as exc:
         raise HTTPException(503, "Sensitive data inspection is unavailable") from exc
     return {
@@ -49,7 +49,7 @@ async def extension_inspect_route(
         "requires_confirmation": decision.action == Action.MASK,
         "policy_version": decision.policy_version,
         "categories": sorted({finding.category.value for finding in decision.findings}),
-        "extension_policy": extension_policy,
+        "extension_policy": {"version": extension_policy["version"], "actions": extension_policy["actions"]},
     }
 
 

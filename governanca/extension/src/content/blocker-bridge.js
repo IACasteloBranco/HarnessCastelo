@@ -228,7 +228,7 @@
             return;
           }
           if (response?.error === 'POLICY_ENGINE_UPDATE_REQUIRED') {
-            showNotice('Envio bloqueado: atualize a extensão para a versão 0.6.7 para aplicar a política vigente.', true);
+            showNotice('Envio bloqueado: atualize a extensão para a versão 0.6.8 para aplicar a política vigente.', true);
             return;
           }
           const result = response?.ok ? response.data : null;

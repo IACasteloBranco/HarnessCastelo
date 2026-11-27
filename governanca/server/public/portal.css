@@ -48,6 +48,23 @@ h4 { margin: 1.4rem 0 .6rem; }
 .health-metrics article { padding: .85rem 1rem; border: 1px solid var(--line); border-radius: 10px; background: #f8fafb; }
 .health-metrics article span { display: block; color: var(--muted); font-size: .83rem; }
 .health-metrics strong { display: block; margin-top: .15rem; color: var(--castelo-navy); font-size: 1.8rem; font-variant-numeric: tabular-nums; }
+.installation-health { margin-top: 1.25rem; }
+.installation-metrics { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: .6rem; margin: .8rem 0 1rem; }
+.installation-metrics article { min-width: 0; padding: .7rem .8rem; border: 1px solid var(--line); border-radius: 9px; background: #f8fafb; }
+.installation-metrics article span { display: block; color: var(--muted); font-size: .76rem; }
+.installation-metrics strong { display: block; margin-top: .1rem; color: var(--castelo-navy); font-size: 1.5rem; font-variant-numeric: tabular-nums; }
+.installation-table-scroll { max-width: 100%; overflow-x: auto; border: 1px solid var(--line); border-radius: 9px; }
+.installation-table { width: 100%; min-width: 850px; border-collapse: collapse; font-size: .84rem; }
+.installation-table th, .installation-table td { padding: .65rem .75rem; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+.installation-table th { background: #f3f6f7; color: var(--muted); font-size: .75rem; }
+.installation-table tbody tr:last-child td { border-bottom: 0; }
+.installation-table td:first-child { color: var(--castelo-navy); font-weight: 650; }
+.heartbeat-settings { display: grid; gap: .6rem; margin-top: 1.2rem; padding: 1rem; border: 1px solid var(--line); border-radius: 10px; background: #f8fafb; }
+.heartbeat-settings h3, .heartbeat-settings p { margin: 0; }
+.heartbeat-settings p { color: var(--muted); font-size: .86rem; }
+.heartbeat-settings-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .8rem; max-width: 560px; }
+.heartbeat-settings-fields label { display: grid; gap: .25rem; color: var(--castelo-navy); font-size: .84rem; font-weight: 600; }
+.heartbeat-settings-fields input { width: 100%; margin: 0; }
 .backup-summary { max-width: 520px; padding: .8rem 1rem; border: 1px solid var(--line); border-radius: 10px; background: #f8fafb; }
 .backup-summary span { display: block; color: var(--muted); font-size: .83rem; }
 .backup-summary strong { display: block; margin-top: .15rem; color: var(--castelo-navy); font-variant-numeric: tabular-nums; }
@@ -194,9 +211,11 @@ button:hover { border-color: #c5a353; background: #cdb064; }
 .tv-platforms .tv-bar-fill { background: linear-gradient(90deg, #a9874f, #d8bd82); }
 .tv-coverage-note { margin: .7rem 0 0; padding: .5rem .65rem; border-radius: 7px; background: #f8f5ef; color: var(--muted); font-size: .7rem; }
 .tv-footer { grid-area: footer; padding: 0 .2rem; color: var(--muted); font-size: .68rem; }
-.policy-editor { margin: 1.1rem 0; padding: 1rem; border: 1px solid #ddd4c6; border-radius: 10px; background: #fffdf8; }
+.policy-editor { grid-template-columns: 1fr; margin: 1.1rem 0; padding: 1rem; border: 1px solid #ddd4c6; border-radius: 10px; background: #fffdf8; }
 .policy-editor h4 { margin: 0; color: var(--castelo-navy); }
 .policy-editor > p { margin: .35rem 0 .8rem; color: var(--muted); font-size: .86rem; }
+.server-policy-editor { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--line); }
+.server-policy-editor > p:not(.feature-note) { margin: .35rem 0 .8rem; color: var(--muted); font-size: .86rem; }
 .policy-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem 1rem; margin: 0 0 .9rem; padding: 0; list-style: none; }
 .policy-controls label { display: grid; grid-template-columns: minmax(0, 1fr) minmax(155px, .8fr); align-items: center; gap: .6rem; color: var(--castelo-navy); font-size: .84rem; font-weight: 600; }
 .policy-controls select { width: 100%; margin: 0; }
@@ -217,6 +236,8 @@ body.tv-mode #tv-screen { display: block; }
   section { padding: 1rem; border-radius: 11px; }
   .feature-heading { flex-direction: column; }
   .health-metrics { grid-template-columns: 1fr; }
+  .installation-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .heartbeat-settings-fields { grid-template-columns: 1fr; }
   .analytics-overview { padding: 1.2rem; }
   #departments > li dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .policy-controls { grid-template-columns: 1fr; }

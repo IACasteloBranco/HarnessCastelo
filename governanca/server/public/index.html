@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; base-uri 'none'; object-src 'none'; form-action 'self'">
   <title>Governança de IA</title>
-  <link rel="stylesheet" href="./portal.css?v=20261126-policy-editor">
+  <link rel="stylesheet" href="./portal.css?v=20261127-heartbeat-settings">
   <script defer src="./markdown-it.min.js?v=20261116-markdown"></script>
-  <script defer src="./app.js?v=20261126-policy-editor"></script>
+  <script defer src="./app.js?v=20261127-heartbeat-settings"></script>
 </head>
 <body>
   <header>
@@ -93,7 +93,35 @@
             <article><span>Respostas incompletas</span><strong id="activity-incomplete">—</strong></article>
           </div>
           <p id="activity-last-event" class="feature-note" role="status" aria-live="polite">Aguardando dados.</p>
-          <p class="feature-note">Este painel mostra interações registradas. O backend não recebe heartbeat, versão instalada nem tamanho de fila; esses estados não podem ser inferidos pela atividade.</p>
+          <p class="feature-note">As métricas mostram interações registradas. O inventário abaixo mostra o último sinal autenticado de cada instalação; ausência de sinal não confirma desinstalação.</p>
+          <section class="installation-health" aria-labelledby="installation-health-title">
+            <div class="feature-heading"><div><h3 id="installation-health-title">Instalações da extensão</h3><p>Último contato, versão reportada e estado da captura.</p></div><span id="installation-health-updated" class="status-pill" role="status" aria-live="polite">Carregando</span></div>
+            <div class="installation-metrics" aria-label="Saúde das instalações">
+              <article><span>Instalações</span><strong id="installation-count">—</strong></article>
+              <article><span>Saudáveis</span><strong id="installation-healthy">—</strong></article>
+              <article><span>Sem sinal recente</span><strong id="installation-stale">—</strong></article>
+              <article><span>Captura pausada</span><strong id="installation-paused">—</strong></article>
+              <article><span>Revogadas</span><strong id="installation-revoked">—</strong></article>
+              <article><span>Estado não reportado</span><strong id="installation-unknown">—</strong></article>
+            </div>
+            <div class="installation-table-scroll" role="region" aria-label="Inventário de instalações" tabindex="0">
+              <table class="installation-table">
+                <thead><tr><th>Colaborador</th><th>Departamento</th><th>Instalação</th><th>Versão</th><th>Captura</th><th>Último sinal</th><th>Saúde</th></tr></thead>
+                <tbody id="installation-health-rows"></tbody>
+              </table>
+            </div>
+            <p id="installation-health-empty" class="feature-note" hidden>Nenhuma instalação vinculada a esta organização.</p>
+          </section>
+          <form id="heartbeat-settings-form" class="heartbeat-settings">
+            <h3>Configuração do heartbeat</h3>
+            <p>O intervalo controla a frequência do sinal. A tolerância evita alertas quando os computadores ficam desligados fora do expediente ou no fim de semana.</p>
+            <div class="heartbeat-settings-fields">
+              <label>Enviar a cada (horas)<input id="heartbeat-interval-hours" type="number" min="1" max="24" step="1" required></label>
+              <label>Marcar sem sinal após (horas)<input id="heartbeat-stale-hours" type="number" min="24" max="168" step="1" required></label>
+            </div>
+            <button type="submit">Salvar configuração</button>
+            <span id="heartbeat-settings-status" role="status" aria-live="polite"></span>
+          </form>
         </section>
         <section aria-labelledby="backup-health-title">
           <div class="feature-heading"><div><h3 id="backup-health-title">Backup do PostgreSQL</h3><p>Último upload e prazo de atualização configurados pelo serviço.</p></div><span id="backup-status" class="status-pill status-warn" role="status" aria-live="polite">Consultando</span></div>
@@ -109,15 +137,18 @@
           <ul id="policy-rules" class="policy-list"></ul>
           <p id="policy-warning-scope" class="feature-note"></p>
           <form id="policy-form" class="policy-editor">
-            <h4>Comportamento por regra</h4>
-            <p>“Padrão do motor” usa a regra atual. Atualize as extensões para a versão 0.6.7 antes de alterar regras; depois, a configuração será aplicada em cada inspeção autenticada.</p>
+            <h4>Política da extensão</h4>
+            <p>“Padrão do motor” usa a regra atual. Atualize as extensões para a versão 0.6.8 antes de alterar regras; a configuração será aplicada em cada inspeção autenticada.</p>
             <ul id="policy-controls" class="policy-controls"></ul>
-            <button type="submit">Salvar política</button>
+            <div class="server-policy-editor">
+              <h4 id="server-policy-version">Inspeção DLP do servidor</h4>
+              <p>Escolha a ação aplicada a cada categoria detectada. Isso não altera quais tipos de dado o Google DLP detecta. Bloquear impede o envio ou o armazenamento do texto.</p>
+              <ul id="server-policy-controls" class="policy-controls"></ul>
+              <p class="feature-note">A política do servidor também protege o conteúdo antes do armazenamento. As decisões por interação não são agregadas pelo backend.</p>
+            </div>
+            <button type="submit">Salvar políticas</button>
             <span id="policy-save-status" role="status" aria-live="polite"></span>
           </form>
-          <h4 id="server-policy-version">Inspeção do servidor</h4>
-          <p class="feature-note">A inspeção remota aplica a política abaixo antes de liberar o envio. As decisões por interação não são agregadas pelo backend.</p>
-          <ul id="server-policies" class="policy-list"></ul>
         </section>
       </div>
     </section>

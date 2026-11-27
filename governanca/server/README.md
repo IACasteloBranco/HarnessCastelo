@@ -8,7 +8,7 @@ Antes de gravar uma interação ou resposta, a API inspeciona o texto novamente 
 
 As características incluem idade, gênero, etnia, estado civil, orientação sexual, saúde, emprego, imigração, religião e política. O SDP eleva a confiança de detecções próximas a termos como “cliente”, “perfil”, “cadastro” ou “paciente”. Esses infoTypes exigem confiança `LIKELY` ou maior.
 
-A política de mascaramento continua separada da detecção e tem versão `governanca-2`. CNPJ continua local porque o Google não oferece um infoType de CNPJ. O texto segue para `southamerica-east1`. Configure `SENSITIVE_DATA_PROTECTION_PROJECT_ID` e, se necessário, `SENSITIVE_DATA_PROTECTION_LOCATION`. O SDK usa Application Default Credentials do servidor, sem chave na extensão.
+A política de mascaramento continua separada da detecção e tem motor `governanca-2`. A Governança configura por organização a ação aplicada a cada categoria detectada: permitir, mascarar ou bloquear. CNPJ continua local porque o Google não oferece um infoType de CNPJ. O texto segue para `southamerica-east1`. Configure `SENSITIVE_DATA_PROTECTION_PROJECT_ID` e, se necessário, `SENSITIVE_DATA_PROTECTION_LOCATION`. O SDK usa Application Default Credentials do servidor, sem chave na extensão.
 
 Ative a API Sensitive Data Protection no projeto e conceda à identidade de serviço do novo servidor apenas o papel `roles/dlp.user`. A rota falha de modo fechado (HTTP 503) se a inspeção obrigatória não puder ser concluída. A chamada usa `include_quote=false`; não há registro local do texto nem dos trechos encontrados.
 

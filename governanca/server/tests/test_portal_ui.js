@@ -44,6 +44,8 @@ async function portal(responses, pathname = '/', confirmResult = true) {
       .find(([key]) => url.startsWith(key))?.[1] ??
       (url === '/api/auth/governance/departments' ? { departments: [] } :
         url === '/api/auth/governance/backup-status' ? { state: 'unknown', last_success_at: null } :
+        url === '/api/capture/v1/admin/machines/health' ? { items: [] } :
+        url === '/api/auth/governance/heartbeat-settings' ? { interval_hours: 12, stale_after_hours: 72 } :
       url === '/api/auth/governance/policies' ? { extension: { version: '0.1.2', destination: 'not_approved', rules: [], decision_counts: 'local_only', warning_rules: ['R05', 'R06'] },
             server_inspection: { version: 'governanca-2', categories: [] } } : undefined);
     const value = typeof result === 'function' ? await result(options) : result;
@@ -260,7 +262,7 @@ test('TV dashboard loads prompts and responses with employee and department', as
 
 test('governance portal uses a new cache key for its application script', () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
-  assert.match(html, /app\.js\?v=20261126-policy-editor/);
+  assert.match(html, /app\.js\?v=20261127-heartbeat-settings/);
 });
 
 test('governance navigation buttons and pages match the ids used by the app', () => {
@@ -301,7 +303,8 @@ test('health and policy views render authenticated backend status and policy sou
       extension: { version: '0.1.2', destination: 'not_approved', actions: ['ALLOW', 'WARN', 'REVIEW', 'BLOCK'],
         warning_rules: ['R05', 'R06'], decision_counts: 'local_only',
         rules: [{ id: 'R01', label: 'Chave privada', effect: 'Bloqueia o envio.' }] },
-      server_inspection: { version: 'governanca-2', categories: [{ name: 'CNPJ', action: 'allow' }, { name: 'CPF', action: 'mask' }] },
+      server_inspection: { version: 'governanca-2', policy_version: 3,
+        categories: [{ name: 'CNPJ', action: 'allow' }, { name: 'CPF', action: 'mask' }] },
     },
     '/api/capture/v1/admin/analytics/departments': { departments: [] },
     '/api/capture/v1/admin/analytics/interactions': { items: [], total: 0 },
@@ -318,7 +321,8 @@ test('health and policy views render authenticated backend status and policy sou
   assert.match(p.el('policy-action-summary').textContent, /avisa e permite continuar/);
   assert.match(p.el('policy-rules').children[0].textContent, /R01.*Chave privada.*Bloqueia/);
   assert.match(p.el('server-policy-version').textContent, /governanca-2/);
-  assert.match(p.el('server-policies').children.map(item => item.textContent).join(' '), /CNPJ.*Permitido.*CPF.*Mascarado/);
+  assert.equal(p.el('server-policy-controls').querySelectorAll('select')[0].value, 'allow');
+  assert.equal(p.el('server-policy-controls').querySelectorAll('select')[1].value, 'mask');
 });
 
 test('governance can save behavior changes with the current policy version', async () => {

@@ -67,7 +67,7 @@ class PolicyRevisionDatabaseTests(unittest.IsolatedAsyncioTestCase):
         actions["R08"] = "WARN"
         saved = await save_policy(self.organization_code, self.employee_id, 0, actions)
         current = await policy_for_organization(self.organization_code)
-        self.assertEqual(saved, {"version": 1, "actions": actions})
+        self.assertEqual(saved, {"version": 1, "extension_engine_version": 1, "actions": actions})
         self.assertEqual(current, saved)
         with self.assertRaisesRegex(RuntimeError, "policy version conflict"):
             await save_policy(self.organization_code, self.employee_id, 0, actions)

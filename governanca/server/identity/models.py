@@ -28,6 +28,8 @@ class Organization(Base):
     code: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    heartbeat_interval_hours: Mapped[int] = mapped_column(Integer, nullable=False, default=12, server_default="12")
+    heartbeat_stale_hours: Mapped[int] = mapped_column(Integer, nullable=False, default=72, server_default="72")
 
 
 class Department(Base):
@@ -85,7 +87,9 @@ class GovernancePolicyRevision(Base):
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
     organization_id: Mapped[UUID] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False)
+    extension_engine_version: Mapped[int] = mapped_column(Integer, nullable=False)
     actions: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    server_actions: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     changed_by: Mapped[UUID] = mapped_column(ForeignKey("employees.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

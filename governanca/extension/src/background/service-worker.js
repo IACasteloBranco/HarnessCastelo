@@ -29,6 +29,8 @@ const ready = (async () => {
   const {installationId} = await chrome.storage.local.get('installationId');
   if (!installationId) await chrome.storage.local.set({installationId: crypto.randomUUID()});
   await chrome.alarms?.create?.('privacy-retention-cleanup', {periodInMinutes: 24 * 60});
+  if (!await chrome.alarms?.get?.('extension-health'))
+    await chrome.alarms?.create?.('extension-health', {delayInMinutes: 5, periodInMinutes: 12 * 60});
   await pruneLocalHistory();
 })();
 
@@ -336,6 +338,7 @@ async function sendToApi(path, options = {}) {
   const bodyText = options.body || '';
   const apiPath = path === '/health' ? '/healthz' : `/api/capture${path}`;
   const signed = (method === 'GET' && /^\/v1\/machines\/[0-9a-f-]{36}$/i.test(path)) ||
+    (method === 'POST' && /^\/v1\/machines\/[0-9a-f-]{36}\/health$/i.test(path)) ||
     (method === 'POST' && /^\/v1\/machines\/[0-9a-f-]{36}\/assignment-request$/i.test(path)) ||
     (method === 'POST' && (path === '/v1/stream-captures' || path === '/v1/artifact-metadata' ||
       path === '/v1/interactions' || /^\/v1\/interactions\/[0-9a-f-]{36}\/response$/i.test(path)));
@@ -356,6 +359,26 @@ async function sendToApi(path, options = {}) {
   }
   if (!response.ok) throw new Error(`HTTP ${response.status}${data.detail ? `: ${data.detail}` : ''}`);
   return data;
+}
+
+async function reportExtensionHealth() {
+  const identity = await credentials();
+  if (!identity || identity.must_change_password) return;
+  const {installationId} = await chrome.storage.local.get('installationId');
+  const machine = await loadMachineAssignment();
+  if (!machine?.key_matches || machine.employee_id !== identity.employee_code) return;
+  const {enabled} = await chrome.storage.local.get('enabled');
+  const result = await sendToApi(`/v1/machines/${installationId}/health`, {
+    method: 'POST', body: JSON.stringify({
+      extension_version: chrome.runtime.getManifest().version, capture_enabled: enabled === true,
+    }),
+  });
+  if (Number.isInteger(result.interval_hours) && result.interval_hours >= 1 && result.interval_hours <= 24) {
+    const periodInMinutes = result.interval_hours * 60;
+    const alarm = await chrome.alarms?.get?.('extension-health');
+    if (alarm?.periodInMinutes !== periodInMinutes)
+      await chrome.alarms?.create?.('extension-health', {delayInMinutes: periodInMinutes, periodInMinutes});
+  }
 }
 
 async function inspectSensitiveText(text) {
@@ -468,6 +491,7 @@ async function pruneLocalHistory() {
 
 chrome.alarms?.onAlarm?.addListener(alarm => {
   if (alarm.name === 'privacy-retention-cleanup') pruneLocalHistory().catch(() => {});
+  if (alarm.name === 'extension-health') reportExtensionHealth().catch(() => {});
 });
 
 function turnLinkKey(conversationUrl, turnKey) {

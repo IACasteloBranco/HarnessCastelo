@@ -47,12 +47,12 @@ def fingerprint(payload: dict) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-async def protect_content_for_storage(request: Request, text: str) -> str:
+async def protect_content_for_storage(request: Request, text: str, organization_code: str) -> str:
     protector = getattr(request.app.state, "protect_content", None)
     if protector is None:
         raise HTTPException(503, "Sensitive data storage inspection is unavailable")
     try:
-        protected = await protector(text)
+        protected = await protector(text, organization_code)
     except HTTPException:
         raise
     except Exception as exc:
@@ -136,6 +136,11 @@ class MachineAssignmentRequest(BaseModel):
                              pattern=r"^[^\s\x00-\x1f\x7f](?:[^\x00-\x1f\x7f]*[^\s\x00-\x1f\x7f])?$")
 
 
+class MachineHealthBody(BaseModel):
+    extension_version: str = Field(min_length=1, max_length=32, pattern=r"^[A-Za-z0-9.+-]+$")
+    capture_enabled: bool
+
+
 @app.post("/v1/machines")
 def register_machine(payload: MachineEnrollment, _employee: EmployeeInfo = Depends(require_capture_token),
                      settings: Settings = Depends(get_settings)) -> dict:
@@ -200,6 +205,56 @@ def get_machine(installation_id: UUID, machine: Machine | None = Depends(require
     if row is None:
         raise HTTPException(status_code=404, detail="Machine not enrolled")
     return dict(row)
+
+
+@app.post("/v1/machines/{installation_id}/health")
+def report_machine_health(installation_id: UUID, payload: MachineHealthBody,
+                          machine: Machine | None = Depends(require_machine_signature),
+                          employee: EmployeeInfo = Depends(require_capture_token),
+                          settings: Settings = Depends(get_settings)) -> dict:
+    if machine is None or machine.installation_id != str(installation_id):
+        raise HTTPException(status_code=403, detail="Installation proof required")
+    with connect(settings) as db:
+        begin_write(db, "machines")
+        cursor = db.execute(
+            """UPDATE machines SET extension_version = ?, capture_enabled = ?
+               WHERE installation_id = ? AND employee_id = ? AND revoked_at IS NULL""",
+            (payload.extension_version, int(payload.capture_enabled), str(installation_id), machine.employee_id),
+        )
+        if cursor.rowcount != 1:
+            raise HTTPException(status_code=403, detail="Installation is unavailable")
+        heartbeat = db.execute(
+            "SELECT heartbeat_interval_hours FROM public.organizations WHERE code = ?",
+            (employee.organization_code,),
+        ).fetchone()
+    if heartbeat is None:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    return {"status": "recorded", "interval_hours": heartbeat["heartbeat_interval_hours"]}
+
+
+@app.get("/v1/admin/machines/health")
+def machine_health(response: Response,
+                   scope: dict = Depends(require_governance_analytics),
+                   settings: Settings = Depends(get_settings)) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    with connect(settings) as db:
+        rows = db.execute(
+            """SELECT m.installation_id, COALESCE(e.display_name, e.code) AS person_name,
+                      d.name AS department_name, m.last_seen_at, m.extension_version,
+                      m.capture_enabled, m.revoked_at
+               FROM machines m
+               JOIN public.employees e ON e.code = COALESCE(m.employee_id, m.requested_employee_id)
+               LEFT JOIN public.departments d ON d.id = e.department_id
+                   AND d.organization_id = e.organization_id
+               WHERE e.organization_id = (SELECT id FROM public.organizations WHERE code = ?)
+               ORDER BY person_name, m.created_at, m.installation_id""",
+            (scope["organization_code"],),
+        ).fetchall()
+        heartbeat = db.execute(
+            "SELECT heartbeat_interval_hours, heartbeat_stale_hours FROM public.organizations WHERE code = ?",
+            (scope["organization_code"],),
+        ).fetchone()
+    return {"items": [dict(row) for row in rows], "heartbeat": dict(heartbeat)}
 
 
 @app.get("/v1/admin/machines/assignment-requests")
@@ -323,12 +378,13 @@ async def create_interaction(
     request: Request,
     response: Response,
     machine: Machine | None = Depends(require_machine_signature),
+    employee: EmployeeInfo = Depends(require_capture_token),
     settings: Settings = Depends(get_settings),
 ) -> InteractionAccepted:
     project_id = project_id_from_url(payload.project.url)
     if machine and str(payload.device_installation_id) != machine.installation_id:
         raise HTTPException(status_code=409, detail="Machine and installation do not match")
-    protected_prompt = await protect_content_for_storage(request, payload.prompt.text)
+    protected_prompt = await protect_content_for_storage(request, payload.prompt.text, employee.organization_code)
     body = payload.model_dump(mode="json")
     body["prompt"]["text"] = protected_prompt
     if machine:
@@ -425,11 +481,12 @@ async def create_response(
     request: Request,
     response: Response,
     machine: Machine | None = Depends(require_machine_signature),
+    employee: EmployeeInfo = Depends(require_capture_token),
     settings: Settings = Depends(get_settings),
 ) -> ResponseAccepted:
     with connect(settings) as db:
         _response_interaction(db, interaction_id, machine, settings)
-    protected_text = await protect_content_for_storage(request, payload.text)
+    protected_text = await protect_content_for_storage(request, payload.text, employee.organization_code)
     received_at = utc_now()
     body = payload.model_dump(mode="json")
     body["text"] = protected_text

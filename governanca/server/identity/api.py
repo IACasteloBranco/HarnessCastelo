@@ -3,18 +3,20 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
+from governanca.server.data_protection import Category
 from .auth import (EmployeeInfo, EXTENSION_SESSION_DURATION, SESSION_DURATION,
                    change_password, login, logout, provision_employee, reset_password,
                    renew_extension_session, resolve_session)
 from .database import session_factory
-from .models import Department, Employee
+from .models import Department, Employee, Organization
 from governanca.server.backup_status import get_backup_status
 from governanca.server.policy_catalog import (
-    EDITABLE_ACTIONS, EDITABLE_RULES, get_policy_catalog, policy_for_organization, save_policy,
+    EDITABLE_ACTIONS, EDITABLE_RULES, EDITABLE_SERVER_ACTIONS, get_policy_catalog,
+    policy_for_organization, save_policy, server_policy_for_organization,
 )
 
 router = APIRouter(prefix="/api/auth", tags=["internal-auth"])
@@ -47,6 +49,7 @@ class CollaboratorResetBody(BaseModel):
 class PolicyUpdateBody(BaseModel):
     expected_version: int = Field(ge=0)
     actions: dict[str, str | None]
+    server_actions: dict[str, str] | None = None
 
     @field_validator("actions")
     @classmethod
@@ -56,6 +59,26 @@ class PolicyUpdateBody(BaseModel):
         ):
             raise ValueError("actions must configure R01-R09 with a supported action or null")
         return value
+
+    @field_validator("server_actions")
+    @classmethod
+    def valid_server_actions(cls, value):
+        if value is not None and (set(value) != {category.value for category in Category} or any(
+            action not in EDITABLE_SERVER_ACTIONS for action in value.values()
+        )):
+            raise ValueError("server_actions must configure every inspection category with a supported action")
+        return value
+
+
+class HeartbeatSettingsBody(BaseModel):
+    interval_hours: int = Field(ge=1, le=24)
+    stale_after_hours: int = Field(ge=24, le=168)
+
+    @model_validator(mode="after")
+    def stale_threshold_covers_missed_signal(self):
+        if self.stale_after_hours < self.interval_hours * 2:
+            raise ValueError("stale_after_hours must be at least twice interval_hours")
+        return self
 
 
 def _check_origin(request: Request) -> None:
@@ -94,12 +117,45 @@ async def governance_backup_status(response: Response,
     return get_backup_status()
 
 
+@router.get("/governance/heartbeat-settings")
+async def governance_heartbeat_settings(response: Response,
+                                       employee: EmployeeInfo = Depends(current_employee)):
+    require_governance(employee)
+    response.headers["Cache-Control"] = "no-store"
+    async with session_factory()() as session:
+        organization = await session.scalar(select(Organization).where(
+            Organization.code == employee.organization_code))
+    if organization is None:
+        raise HTTPException(404, "organization not found")
+    return {"interval_hours": organization.heartbeat_interval_hours,
+            "stale_after_hours": organization.heartbeat_stale_hours}
+
+
+@router.put("/governance/heartbeat-settings")
+async def update_governance_heartbeat_settings(body: HeartbeatSettingsBody, request: Request,
+                                               response: Response,
+                                               employee: EmployeeInfo = Depends(current_employee)):
+    _check_origin(request)
+    require_governance(employee)
+    response.headers["Cache-Control"] = "no-store"
+    async with session_factory()() as session, session.begin():
+        organization = await session.scalar(select(Organization).where(
+            Organization.code == employee.organization_code).with_for_update())
+        if organization is None:
+            raise HTTPException(404, "organization not found")
+        organization.heartbeat_interval_hours = body.interval_hours
+        organization.heartbeat_stale_hours = body.stale_after_hours
+    return {"interval_hours": body.interval_hours, "stale_after_hours": body.stale_after_hours}
+
+
 @router.get("/governance/policies")
 async def governance_policies(response: Response,
                               employee: EmployeeInfo = Depends(current_employee)):
     require_governance(employee)
     response.headers["Cache-Control"] = "no-store"
-    return get_policy_catalog(await policy_for_organization(employee.organization_code))
+    policy = await policy_for_organization(employee.organization_code)
+    server_policy = await server_policy_for_organization(employee.organization_code)
+    return get_policy_catalog(policy, server_policy)
 
 
 @router.put("/governance/policies")
@@ -110,7 +166,7 @@ async def update_governance_policies(body: PolicyUpdateBody, request: Request, r
     response.headers["Cache-Control"] = "no-store"
     try:
         policy = await save_policy(employee.organization_code, employee.employee_id,
-                                   body.expected_version, body.actions)
+                                   body.expected_version, body.actions, body.server_actions)
     except RuntimeError as exc:
         raise HTTPException(409, "policy was changed by another governance user; reload it") from exc
     except ValueError as exc:

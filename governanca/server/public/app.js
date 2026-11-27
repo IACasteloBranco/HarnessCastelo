@@ -37,6 +37,8 @@ let detailVersion = 0;
 let interactionVersion = 0;
 let analyticsVersion = 0;
 let activityVersion = 0;
+let machineHealthVersion = 0;
+let heartbeatSettingsVersion = 0;
 let backupStatusVersion = 0;
 let policyCatalogVersion = 0;
 let activePolicyVersion = 0;
@@ -52,7 +54,7 @@ for (const [id, page] of [['nav-overview', 'overview'], ['nav-health', 'health']
       if (target === page) tab.setAttribute('aria-current', 'page');
       else tab.removeAttribute('aria-current');
     }
-    if (page === 'health') { void activityAnalytics(); void backupStatus(); }
+    if (page === 'health') { void activityAnalytics(); void machineHealth(); void heartbeatSettings(); void backupStatus(); }
     if (page === 'policies') void policyCatalog();
   });
 }
@@ -222,6 +224,88 @@ async function activityAnalytics() {
     $('activity-last-event').textContent = 'Não foi possível consultar a atividade de captura.';
   }
 }
+async function machineHealth() {
+  const version = ++machineHealthVersion;
+  try {
+    const result = await api('/api/capture/v1/admin/machines/health');
+    if (version !== machineHealthVersion || $('portal-screen').hidden) return;
+    const items = result.items || [];
+    const staleHours = Number(result.heartbeat?.heartbeat_stale_hours) || 72;
+    const cutoff = Date.now() - staleHours * 60 * 60 * 1000;
+    const counts = {healthy: 0, stale: 0, paused: 0, revoked: 0, unknown: 0};
+    const rows = $('installation-health-rows');
+    rows.replaceChildren();
+    for (const item of items) {
+      const seenAt = Date.parse(item.last_seen_at || '');
+      const recent = Number.isFinite(seenAt) && seenAt <= Date.now() + 5 * 60_000 && seenAt >= cutoff;
+      const captureEnabled = item.capture_enabled === null ? null : Number(item.capture_enabled) === 1;
+      const state = item.revoked_at ? 'revoked' : !recent ? 'stale'
+        : captureEnabled === false ? 'paused' : captureEnabled === true ? 'healthy' : 'unknown';
+      counts[state]++;
+      const label = ({revoked: 'Revogada', stale: 'Sem sinal recente', paused: 'Captura pausada',
+        healthy: 'Saudável', unknown: 'Sinal recente'})[state];
+      const row = document.createElement('tr');
+      for (const value of [item.person_name || 'Não identificado', item.department_name || 'Sem departamento',
+        `…${String(item.installation_id || '').slice(-8)}`, item.extension_version || 'Não reportada',
+        captureEnabled === null ? 'Não reportado' : captureEnabled ? 'Ativa' : 'Pausada',
+        item.last_seen_at ? formatDate(item.last_seen_at) : 'Nunca']) {
+        const cell = document.createElement('td');
+        cell.textContent = value;
+        row.append(cell);
+      }
+      const statusCell = document.createElement('td');
+      const status = document.createElement('span');
+      status.className = `status-pill ${state === 'healthy' ? 'status-ok' : 'status-warn'}`;
+      status.textContent = label;
+      statusCell.append(status);
+      row.append(statusCell);
+      rows.append(row);
+    }
+    $('installation-count').textContent = new Intl.NumberFormat('pt-BR').format(items.length);
+    $('installation-healthy').textContent = new Intl.NumberFormat('pt-BR').format(counts.healthy);
+    $('installation-stale').textContent = new Intl.NumberFormat('pt-BR').format(counts.stale);
+    $('installation-paused').textContent = new Intl.NumberFormat('pt-BR').format(counts.paused);
+    $('installation-revoked').textContent = new Intl.NumberFormat('pt-BR').format(counts.revoked);
+    $('installation-unknown').textContent = new Intl.NumberFormat('pt-BR').format(counts.unknown);
+    $('installation-health-empty').hidden = items.length > 0;
+    $('installation-health-updated').textContent = `Atualizado às ${new Intl.DateTimeFormat('pt-BR', {
+      timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit',
+    }).format(new Date())}`;
+  } catch {
+    if (version === machineHealthVersion && !$('portal-screen').hidden)
+      $('installation-health-updated').textContent = 'Consulta indisponível';
+  }
+}
+async function heartbeatSettings() {
+  const version = ++heartbeatSettingsVersion;
+  try {
+    const result = await api('/api/auth/governance/heartbeat-settings');
+    if (version !== heartbeatSettingsVersion || $('portal-screen').hidden) return;
+    $('heartbeat-interval-hours').value = result.interval_hours;
+    $('heartbeat-stale-hours').value = result.stale_after_hours;
+  } catch {
+    if (version === heartbeatSettingsVersion && !$('portal-screen').hidden)
+      $('heartbeat-settings-status').textContent = 'Não foi possível carregar a configuração.';
+  }
+}
+async function saveHeartbeatSettings(event) {
+  event.preventDefault();
+  const intervalHours = Number($('heartbeat-interval-hours').value);
+  const staleAfterHours = Number($('heartbeat-stale-hours').value);
+  if (staleAfterHours < intervalHours * 2) {
+    $('heartbeat-settings-status').textContent = 'A tolerância deve ser pelo menos o dobro do intervalo.';
+    return;
+  }
+  try {
+    await api('/api/auth/governance/heartbeat-settings', {method: 'PUT', body: JSON.stringify({
+      interval_hours: intervalHours, stale_after_hours: staleAfterHours,
+    })});
+    $('heartbeat-settings-status').textContent = 'Configuração salva. O novo intervalo será aplicado no próximo heartbeat.';
+    void machineHealth();
+  } catch (error) {
+    $('heartbeat-settings-status').textContent = error.message;
+  }
+}
 async function backupStatus(tv = false) {
   const version = ++backupStatusVersion;
   const statusId = tv ? 'tv-backup-status' : 'backup-status';
@@ -240,9 +324,6 @@ async function backupStatus(tv = false) {
     $(statusId).textContent = 'Consulta indisponível';
     if (!tv) $('backup-last-success').textContent = 'Não foi possível consultar o serviço.';
   }
-}
-function policyAction(action) {
-  return ({allow: 'Permitido', mask: 'Mascarado', block: 'Bloqueado'})[action] || 'Revisar';
 }
 async function policyCatalog(tv = false) {
   const version = ++policyCatalogVersion;
@@ -290,12 +371,25 @@ async function policyCatalog(tv = false) {
       controls.append(row);
     }
     const remote = result.server_inspection;
-    $('server-policy-version').textContent = `Inspeção do servidor (código) · ${remote.version}`;
-    const categories = $('server-policies');
+    $('server-policy-version').textContent = `Inspeção DLP · política v${remote.policy_version} · motor ${remote.version}`;
+    const categories = $('server-policy-controls');
     categories.replaceChildren();
     for (const item of remote.categories) {
       const row = document.createElement('li');
-      row.textContent = `${item.name}: ${policyAction(item.action)}`;
+      const label = document.createElement('label');
+      label.textContent = item.name;
+      const select = document.createElement('select');
+      select.dataset.category = item.name;
+      for (const [value, text] of [['allow', 'Permitir sem mascarar'], ['mask', 'Mascarar'], ['block', 'Bloquear']]) {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = text;
+        option.selected = item.action === value;
+        select.append(option);
+      }
+      select.value = item.action;
+      label.append(select);
+      row.append(label);
       categories.append(row);
     }
   } catch {
@@ -308,9 +402,11 @@ async function savePolicy(event) {
   event.preventDefault();
   const actions = Object.fromEntries([...$('policy-controls').querySelectorAll('select')]
     .map(select => [select.dataset.rule, select.value || null]));
+  const serverActions = Object.fromEntries([...$('server-policy-controls').querySelectorAll('select')]
+    .map(select => [select.dataset.category, select.value]));
   try {
     const saved = await api('/api/auth/governance/policies', {method: 'PUT', body: JSON.stringify({
-      expected_version: activePolicyVersion, actions,
+      expected_version: activePolicyVersion, actions, server_actions: serverActions,
     })});
     activePolicyVersion = saved.version;
     $('policy-save-status').textContent = `Política v${saved.version} salva e auditada.`;
@@ -486,6 +582,7 @@ $('login-form').addEventListener('submit', async event => {
   } catch (error) { errorMessage(error); }
 });
 $('policy-form').addEventListener('submit', savePolicy);
+$('heartbeat-settings-form').addEventListener('submit', saveHeartbeatSettings);
 $('search-form').addEventListener('submit', async event => {
   event.preventDefault();
   clearDetail();
@@ -585,6 +682,14 @@ $('logout').addEventListener('click', async () => {
     clearDetail();
     for (const id of ['summary', 'interaction-count', 'active-case', 'message', 'activity-interactions',
       'activity-complete', 'activity-incomplete', 'activity-last-event', 'activity-updated']) $(id).textContent = '';
+    machineHealthVersion++;
+    heartbeatSettingsVersion++;
+    $('installation-health-rows').replaceChildren();
+    for (const id of ['installation-health-updated', 'installation-count', 'installation-healthy',
+      'installation-stale', 'installation-paused', 'installation-revoked', 'installation-unknown']) $(id).textContent = '';
+    $('heartbeat-interval-hours').value = '';
+    $('heartbeat-stale-hours').value = '';
+    $('heartbeat-settings-status').textContent = '';
     for (const id of ['departments', 'interactions', 'investigations']) $(id).replaceChildren();
     temporaryPassword = '';
     $('account-result').textContent = '';
@@ -592,7 +697,7 @@ $('logout').addEventListener('click', async () => {
     for (const id of ['backup-status', 'backup-last-success', 'extension-policy-version', 'policy-scope',
       'policy-warning-scope', 'server-policy-version', 'tv-backup-status', 'tv-policy-version']) $(id).textContent = '';
     $('policy-rules').replaceChildren();
-    $('server-policies').replaceChildren();
+    $('server-policy-controls').replaceChildren();
     show('login');
   } catch (error) { errorMessage(error); }
 });

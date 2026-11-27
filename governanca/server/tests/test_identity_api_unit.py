@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import httpx
 from fastapi import FastAPI
 
+from governanca.server.data_protection import Category
 from governanca.server.identity import api
 from governanca.server.identity.auth import EmployeeInfo
 
@@ -95,7 +96,12 @@ class GovernancePasswordResetApiTests(unittest.IsolatedAsyncioTestCase):
         actor = EmployeeInfo(uuid4(), "GOV1", "ORG1", None, "governance", False)
         app = self._app(actor)
         with patch.object(api, "policy_for_organization", new_callable=AsyncMock,
-                          return_value={"version": 3, "actions": {"R01": "BLOCK"}}):
+                          return_value={"version": 3, "actions": {"R01": "BLOCK"}}), \
+             patch.object(api, "server_policy_for_organization", new_callable=AsyncMock,
+                          return_value={"version": 3, "actions": {
+                              category.value: "allow" if category.value == "CNPJ" else "mask"
+                              for category in Category
+                          }}):
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app), base_url="https://governanca.test"
             ) as client:
@@ -128,7 +134,7 @@ class GovernancePasswordResetApiTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["version"], 1)
-        save.assert_awaited_once_with("ORG1", actor.employee_id, 0, actions)
+        save.assert_awaited_once_with("ORG1", actor.employee_id, 0, actions, None)
 
     async def test_non_governance_cannot_edit_policy_and_invalid_rules_are_rejected(self):
         actor = EmployeeInfo(uuid4(), "EMP2", "ORG1", "FIN", "collaborator", False)

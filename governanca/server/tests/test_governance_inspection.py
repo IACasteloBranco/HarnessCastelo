@@ -7,6 +7,7 @@ from fastapi import FastAPI
 
 from governanca.server.identity.auth import EmployeeInfo
 from governanca.server.data_protection import Category, Finding
+from governanca.server.policy_catalog import DEFAULT_SERVER_ACTIONS
 from governanca.server.sensitive_data_protection import InspectionUnavailable
 from governanca.server import inspection
 from governanca.server.auth_api import EXTENSION_ORIGIN, extension_employee, router
@@ -24,13 +25,18 @@ class GovernanceInspectionTests(unittest.IsolatedAsyncioTestCase):
                                        return_value=())
         self.remote_inspection = self.inspection.start()
         self.policy = patch("governanca.server.auth_api.policy_for_organization", new_callable=AsyncMock,
-                            return_value={"version": 0, "actions": {f"R{n:02}": None for n in range(1, 10)}})
+                            return_value={"version": 0, "extension_engine_version": 0,
+                                          "actions": {f"R{n:02}": None for n in range(1, 10)}})
         self.policy.start()
+        self.server_policy = patch("governanca.server.policy_catalog.server_policy_for_organization", new_callable=AsyncMock,
+                                   return_value={"version": 0, "actions": DEFAULT_SERVER_ACTIONS})
+        self.server_policy.start()
 
     async def asyncTearDown(self):
         await self.client.aclose()
         self.inspection.stop()
         self.policy.stop()
+        self.server_policy.stop()
 
     async def test_masks_personal_data_and_allows_cnpj(self):
         response = await self.client.post("/api/auth/extension/inspect", headers={"Origin": EXTENSION_ORIGIN}, json={
@@ -57,7 +63,8 @@ class GovernanceInspectionTests(unittest.IsolatedAsyncioTestCase):
     async def test_active_policy_requires_the_updated_extension_before_inspection(self):
         self.policy.stop()
         self.policy = patch("governanca.server.auth_api.policy_for_organization", new_callable=AsyncMock,
-                            return_value={"version": 1, "actions": {f"R{n:02}": None for n in range(1, 10)}})
+                            return_value={"version": 1, "extension_engine_version": 1,
+                                          "actions": {f"R{n:02}": None for n in range(1, 10)}})
         self.policy.start()
         headers = {"Origin": EXTENSION_ORIGIN}
         old_client = await self.client.post("/api/auth/extension/inspect", headers=headers,

@@ -13,9 +13,12 @@ from governanca.server.capture_app.integration import capture_app
 from governanca.server.capture_app.main import app as legacy_capture_app
 from governanca.server.capture_app.machine_identity import require_machine_signature
 from governanca.server.capture_app.settings import Settings, get_settings
+from governanca.server.identity.auth import EmployeeInfo
 from governanca.server.inspection import protect_stored_text
 from governanca.server.sensitive_data_protection import InspectionUnavailable
 from governanca.server import inspection
+from governanca.server.capture_app.security import require_capture_token
+from governanca.server.data_protection import Category
 
 
 class CaptureContentProtectionTests(unittest.IsolatedAsyncioTestCase):
@@ -30,13 +33,23 @@ class CaptureContentProtectionTests(unittest.IsolatedAsyncioTestCase):
         self.capture = capture_app(protect_content=protect_stored_text)
         self.previous_overrides = legacy_capture_app.dependency_overrides.copy()
         legacy_capture_app.dependency_overrides[require_machine_signature] = lambda: None
+        legacy_capture_app.dependency_overrides[require_capture_token] = lambda: EmployeeInfo(
+            uuid4(), "synthetic", "org", "dept", "collaborator", False
+        )
         legacy_capture_app.dependency_overrides[get_settings] = lambda: self.settings
+        self.server_policy = patch("governanca.server.policy_catalog.server_policy_for_organization",
+                                   new_callable=AsyncMock, return_value={"version": 0, "actions": {
+                                       category.value: "allow" if category.value == "CNPJ" else "mask"
+                                       for category in Category
+                                   }})
+        self.server_policy.start()
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=self.capture),
                                         base_url="https://capture.test")
 
     async def asyncTearDown(self):
         await self.client.aclose()
         self.inspection.stop()
+        self.server_policy.stop()
         legacy_capture_app.dependency_overrides.clear()
         legacy_capture_app.dependency_overrides.update(self.previous_overrides)
         self.temp.cleanup()
