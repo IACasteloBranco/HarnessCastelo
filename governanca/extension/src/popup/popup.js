@@ -11,7 +11,7 @@ async function refresh() {
   $('enabled').checked = config.enabled;
   $('enabled').disabled = !config.privacyNotice.accepted && !config.enabled;
   $('capture-readiness').textContent = config.enabled && !config.captureAllowed
-    ? 'Ativação salva, mas a captura está pausada até sessão, aviso e vínculo estarem válidos. Pode retomar quando forem restabelecidos; desmarque e salve para desligá-la.'
+    ? `Captura bloqueada: ${config.captureBlockReason}`
     : config.captureAllowed ? 'Pronta para capturar; cada envio ainda depende da disponibilidade da API.' : 'Captura desativada.';
   $('privacy-notice').hidden = config.privacyNotice.accepted;
   $('privacy-version').textContent = config.privacyNotice.version;

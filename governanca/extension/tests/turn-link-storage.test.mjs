@@ -16,14 +16,16 @@ const promptHash = 'a'.repeat(64);
 function captureReadyData() {
   return {installationId: '00000000-0000-4000-8000-000000000098', enabled: true,
     privacyAcceptance: {version: '2026-11-16.1', subject: 'SYN-1', accepted_at: new Date().toISOString()},
-    authSession: {access_token: 'synthetic-access-token', employee_code: 'SYN-1',
+    authSession: {access_token: 'synthetic-access-token', employee_code: 'SYN-1', department_code: 'TEST',
       expires_at: Math.floor(Date.now() / 1000) + 3600},
     machineAssignment: {person_name: 'Pessoa Sintética', employee_id: 'SYN-1',
       department_code: 'TEST', key_matches: true}};
 }
 
-function worker({localData = {}, fetchImpl = async () => {throw new Error('unexpected fetch');}} = {}) {
+function worker({localData = {}, sessionData = {}, separateStorage = false,
+  fetchImpl = async () => {throw new Error('unexpected fetch');}} = {}) {
   const local = {...localData};
+  const session = separateStorage ? {...sessionData} : local;
   let onMessage;
   const storage = {
     async get(keys) {
@@ -34,17 +36,27 @@ function worker({localData = {}, fetchImpl = async () => {throw new Error('unexp
     async remove(keys) { for (const key of typeof keys === 'string' ? [keys] : keys) delete local[key]; },
     async setAccessLevel() {}
   };
-  const chrome = {storage: {local: storage, session: storage},
+  const sessionStorage = separateStorage ? {
+    async get(keys) {
+      if (typeof keys === 'string') return {[keys]: session[keys]};
+      return Object.fromEntries((Array.isArray(keys) ? keys : Object.keys(session)).map(key => [key, session[key]]));
+    },
+    async set(values) { Object.assign(session, values); },
+    async remove(keys) { for (const key of typeof keys === 'string' ? [keys] : keys) delete session[key]; },
+    async setAccessLevel() {}
+  } : storage;
+  const chrome = {storage: {local: storage, session: sessionStorage},
     runtime: {getURL: path => `chrome-extension://test/${path}`,
       onMessage: {addListener: listener => {onMessage = listener;}},
       onConnect: {addListener: () => {}}}, alarms: {create: async () => {}, onAlarm: {addListener: () => {}}},
     tabs: {query: async () => []}};
   vm.runInNewContext(source, {chrome, crypto: webcrypto, URL, TextEncoder, Uint8Array,
-    AbortSignal, btoa, fetch: fetchImpl, validConversationObservation, console});
+    AbortSignal, atob: value => Buffer.from(value, 'base64').toString('binary'), btoa,
+    fetch: fetchImpl, validConversationObservation, console});
   const sender = {tab: {id: 1}, frameId: 0,
     url: 'https://chatgpt.com/g/g-p-test/c/00000000-0000-4000-8000-000000000030'};
   const send = (message, source = sender) => new Promise(resolve => onMessage(message, source, resolve));
-  return {send, local};
+  return {send, local, session};
 }
 
 test('temporary password login directs to governance and never starts capture', async () => {
@@ -106,12 +118,124 @@ test('sends the policy engine version and accepts a versioned backend policy', a
   assert.equal(result.data.extension_policy.version, 1);
 });
 
+test('isolates two active installations for one account through activation, capture, mismatch, and logout', async () => {
+  const ids = ['00000000-0000-4000-8000-0000000000a1', '00000000-0000-4000-8000-0000000000b2'];
+  const machines = new Map();
+  for (const id of ids) {
+    const pair = await webcrypto.subtle.generateKey({name: 'ECDSA', namedCurve: 'P-256'}, true, ['sign', 'verify']);
+    const privateKey = await webcrypto.subtle.exportKey('jwk', pair.privateKey);
+    const jwk = await webcrypto.subtle.exportKey('jwk', pair.publicKey);
+    const publicKey = {kty: jwk.kty, crv: jwk.crv, x: jwk.x, y: jwk.y};
+    const decode = value => Buffer.from(value, 'base64url');
+    const point = new Uint8Array([4, ...decode(publicKey.x), ...decode(publicKey.y)]);
+    const digest = new Uint8Array(await webcrypto.subtle.digest('SHA-256', point));
+    const keyFingerprint = [...digest].map(byte => byte.toString(16).padStart(2, '0')).join('');
+    machines.set(id, {privateKey, publicKey, keyFingerprint, employee_id: 'SYN-1'});
+  }
+  const requests = [];
+  const revokedTokens = new Set();
+  const api = async (url, options = {}) => {
+    const path = new URL(url).pathname;
+    if (path.endsWith('/api/auth/extension/login'))
+      return {ok: true, json: async () => ({...account('SYN-1'),
+        access_token: 'synthetic-installation-A-access-token'})};
+    if (path.endsWith('/api/auth/extension/logout')) {
+      revokedTokens.add(options.headers.Authorization.slice('Bearer '.length));
+      return {ok: true, json: async () => ({})};
+    }
+    if (path.includes('/api/capture/v1/interactions')) {
+      const token = options.headers.Authorization.slice('Bearer '.length);
+      if (revokedTokens.has(token)) return {ok: false, status: 401, json: async () => ({})};
+      const payload = JSON.parse(options.body);
+      requests.push({token, ...payload});
+      return {ok: true, status: 201, json: async () => ({interaction_id})};
+    }
+    const machinePath = path.match(/\/v1\/machines\/([^/]+)$/);
+    if (machinePath) {
+      const machine = machines.get(machinePath[1]);
+      return {ok: Boolean(machine), status: machine ? 200 : 404, json: async () => ({
+        installation_id: machinePath[1], key_fingerprint: machine?.keyFingerprint,
+        person_name: 'Pessoa Sintética', employee_id: machine?.employee_id, department_code: 'TEST'
+      })};
+    }
+    return {ok: true, status: 200, json: async () => ({})};
+  };
+  const account = employee_code => ({access_token: `synthetic-${employee_code}-access-token`, employee_code,
+    expires_at: Math.floor(Date.now() / 1000) + 3600, department_code: 'TEST'});
+  const privacyAcceptance = employee_code => ({version: '2026-11-16.1', subject: employee_code,
+    accepted_at: new Date().toISOString()});
+  const makeInstallation = (id, token, authenticated = true, privacyAccepted = true) => {
+    const machine = machines.get(id);
+    return worker({separateStorage: true, fetchImpl: api, localData: {installationId: id, enabled: false,
+      ...(authenticated ? {authSession: {...account('SYN-1'), access_token: token}} : {}),
+      ...(privacyAccepted ? {privacyAcceptance: privacyAcceptance('SYN-1')} : {}),
+      machinePrivateKey: machine.privateKey, machinePublicKey: machine.publicKey}, sessionData: {
+      machineAssignment: {person_name: 'Pessoa Sintética', employee_id: 'SYN-1',
+        department_code: 'TEST', key_matches: true}}});
+  };
+  const a = makeInstallation(ids[0], 'synthetic-installation-A-access-token', false, false);
+  const b = makeInstallation(ids[1], 'synthetic-installation-B-access-token');
+  const popup = {url: 'chrome-extension://test/src/popup/popup.html'};
+  const page = {tab: {id: 1}, frameId: 0, url: 'https://chatgpt.com/'};
+
+  assert.equal((await a.send({type: 'probe_config'})).data.enabled, false);
+  assert.equal((await b.send({type: 'probe_config'})).data.enabled, false);
+  const aLogin = await a.send({type: 'login', employeeCode: 'SYN-1', password: 'synthetic'}, popup);
+  assert.equal(aLogin.ok, true, aLogin.error);
+  assert.equal(a.local.authSession.employee_code, 'SYN-1');
+  assert.equal(b.local.authSession.employee_code, 'SYN-1');
+  assert.equal((await a.send({type: 'probe_config'})).data.enabled, false);
+  assert.equal((await b.send({type: 'probe_config'})).data.enabled, false);
+  const aActivation = await a.send({type: 'accept_privacy_notice', version: '2026-11-16.1'}, popup);
+  assert.equal(aActivation.ok, true, aActivation.error);
+  assert.equal((await a.send({type: 'probe_config'})).data.enabled, true);
+  assert.equal((await b.send({type: 'probe_config'})).data.enabled, false);
+  const bStatus = await b.send({type: 'status'}, popup);
+  assert.equal(bStatus.data.readiness.capture_enabled, false);
+  assert.match(bStatus.data.captureBlockReason, /pausada nesta instalação/);
+
+  const bActivation = await b.send({type: 'save', enabled: true}, popup);
+  assert.equal(bActivation.ok, true, bActivation.error);
+  const prompt = {schema_version: '0.1',
+    platform: 'chatgpt_web', project: {capture_status: 'unknown', reason: 'Projeto não identificado'},
+    conversation: {capture_status: 'unknown', reason: 'ID da conversa indisponível'},
+    prompt: {text: 'Prompt sintético', capture_status: 'observed'}, attachments: [],
+    attachments_capture_status: 'not_observed', attachments_truncated: false, adapter_version: '0.4.6',
+    observed_at: new Date().toISOString()};
+  const [aCapture, bCapture] = await Promise.all([
+    a.send({type: 'capture_prompt', payload: {...prompt, client_event_id: '00000000-0000-4000-8000-0000000000a3'}}, page),
+    b.send({type: 'capture_prompt', payload: {...prompt, client_event_id: '00000000-0000-4000-8000-0000000000b4'}}, page)
+  ]);
+  assert.equal(aCapture.ok, true, aCapture.error);
+  assert.equal(bCapture.ok, true, bCapture.error);
+  assert.deepEqual(requests.map(({device_installation_id, token}) => [device_installation_id, token])
+    .sort(([first], [second]) => first.localeCompare(second)), [
+    [ids[0], 'synthetic-installation-A-access-token'], [ids[1], 'synthetic-installation-B-access-token']
+  ].sort(([first], [second]) => first.localeCompare(second)));
+
+  machines.get(ids[1]).employee_id = 'SYN-OTHER';
+  const mismatched = await b.send({type: 'status'}, popup);
+  assert.equal(mismatched.data.readiness.installation_assigned, true);
+  assert.equal(mismatched.data.readiness.identity_matches, false);
+  assert.match(mismatched.data.captureBlockReason, /não corresponde/);
+  assert.equal((await b.send({type: 'capture_prompt', payload: prompt}, page)).ok, false);
+
+  await a.send({type: 'logout'}, {url: 'chrome-extension://test/src/popup/popup.html'});
+  assert.equal(a.local.authSession, undefined);
+  assert.equal(b.local.authSession.employee_code, 'SYN-1');
+  assert.equal((await b.send({type: 'probe_config'})).data.enabled, false);
+  machines.get(ids[1]).employee_id = 'SYN-1';
+  await b.send({type: 'status'}, popup);
+  assert.equal((await b.send({type: 'capture_prompt', payload: {...prompt,
+    client_event_id: '00000000-0000-4000-8000-0000000000b5'}}, page)).ok, true);
+});
+
 test('stores the first ChatGPT prompt while its conversation URL is unknown', async () => {
   let submitted;
   const {send} = worker({localData: {
     installationId: '00000000-0000-4000-8000-000000000098', enabled: true,
     privacyAcceptance: {version: '2026-11-16.1', subject: 'SYN-1', accepted_at: new Date().toISOString()},
-    authSession: {access_token: 'synthetic-access-token', employee_code: 'SYN-1',
+    authSession: {access_token: 'synthetic-access-token', employee_code: 'SYN-1', department_code: 'TEST',
       expires_at: Math.floor(Date.now() / 1000) + 3600},
     machineAssignment: {person_name: 'Pessoa Sintética', employee_id: 'SYN-1',
       department_code: 'TEST', key_matches: true}
@@ -164,7 +288,7 @@ test('keeps actionable diagnostics when blocker health updates repeat', async ()
   await send({type: 'capture_prompt', payload: {prompt: {text: 'SYNTHETIC-MARKER'}}});
   for (let index = 0; index < 40; index++)
     await send({type: 'blocker_health', mainActive: true, blocked: false,
-      synchronized: true, machineAssigned: false, authExpired: true, mainBlocked: true});
+      synchronized: true, captureAllowed: false, authExpired: true, mainBlocked: true});
 
   assert.equal(local.captureDiagnostics.some(item => item.stage === 'prompt_rejected' &&
     item.error_code === 'invalid_prompt'), true);
@@ -173,9 +297,8 @@ test('keeps actionable diagnostics when blocker health updates repeat', async ()
   assert.deepEqual(health, {stage: 'blocker_health', main_active: true,
     policy_synchronized: true, page_capture_allowed: false, auth_expired: true,
     protocol_compatible: false, network_gate_blocked: true,
-    cloud_configured: true, capture_enabled: true, auth_session_valid: true,
-    machine_assignment_complete: true, key_matches: true, subject_bound: true,
-    privacy_notice_accepted: true,
+    server_configured: true, authenticated: true, installation_assigned: true,
+    identity_matches: true, capture_enabled: true, privacy_accepted: true,
     capture_allowed: true});
 });
 
@@ -187,15 +310,14 @@ test('reports each capture readiness requirement without exposing credentials', 
     department_code: 'TEST', key_matches: true};
 
   const result = await send({type: 'blocker_health', mainActive: true, blocked: false,
-    synchronized: true, machineAssigned: true, authExpired: false, mainBlocked: true});
+    synchronized: true, captureAllowed: true, authExpired: false, mainBlocked: true});
   assert.equal(result.ok, true, result.error);
 
   const diagnostic = local.captureDiagnostics.find(item => item.stage === 'blocker_health');
   assert.equal(diagnostic.capture_enabled, true);
-  assert.equal(diagnostic.auth_session_valid, true);
-  assert.equal(diagnostic.machine_assignment_complete, true);
-  assert.equal(diagnostic.key_matches, true);
-  assert.equal(diagnostic.subject_bound, true);
+  assert.equal(diagnostic.authenticated, true);
+  assert.equal(diagnostic.installation_assigned, true);
+  assert.equal(diagnostic.identity_matches, true);
   assert.equal(diagnostic.capture_allowed, true);
   assert.equal(JSON.stringify(diagnostic).includes('synthetic-token'), false);
 
@@ -205,8 +327,8 @@ test('reports each capture readiness requirement without exposing credentials', 
     findings: [{rule: 'MACHINE', action: 'BLOCK', count: 1}]});
   const decision = local.captureDiagnostics.find(item => item.stage === 'policy_decision');
   assert.equal(decision.capture_enabled, false);
-  assert.equal(decision.auth_session_valid, true);
-  assert.equal(decision.machine_assignment_complete, true);
+  assert.equal(decision.authenticated, true);
+  assert.equal(decision.installation_assigned, true);
   assert.equal(decision.capture_allowed, false);
 });
 
@@ -292,7 +414,7 @@ test('renews an active extension session without turning capture off', async () 
     return {ok: true, status: 200, json: async () => ({expires_at: extended})};
   }});
   const result = await send({type: 'blocker_health', mainActive: true, blocked: false,
-    synchronized: true, machineAssigned: true, authExpired: false, mainBlocked: true});
+    synchronized: true, captureAllowed: true, authExpired: false, mainBlocked: true});
   assert.equal(result.ok, true, result.error);
   assert.equal(local.authSession.expires_at, extended);
   assert.equal(local.enabled, true);

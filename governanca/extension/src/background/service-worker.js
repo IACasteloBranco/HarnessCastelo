@@ -9,7 +9,7 @@ const PLATFORM_BY_ORIGIN = new Map([
   [CHATGPT_ORIGIN, 'chatgpt_web'],
   [CLAUDE_ORIGIN, 'claude_web']
 ]);
-const BLOCKER_PROTOCOL_VERSION = 1; // Bump only for incompatible blocker-message changes.
+const BLOCKER_PROTOCOL_VERSION = 2; // Bump only for incompatible blocker-message changes.
 const POLICY_ENGINE_VERSION = '0.1.3';
 const PRIVACY_NOTICE_VERSION = '2026-11-16.1';
 const LOCAL_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
@@ -104,21 +104,32 @@ async function captureReadiness() {
   const [{enabled, privacyAcceptance, authSession}, {machineAssignment}] = await Promise.all([
     chrome.storage.local.get(['enabled', 'privacyAcceptance', 'authSession']),
     chrome.storage.session.get(['machineAssignment'])]);
-  const configured = cloudConfigured();
+  const serverConfigured = cloudConfigured();
   const currentIdentity = await currentCredentials(sessionGeneration, authSession?.access_token);
-  const authSessionValid = Boolean(currentIdentity) && authSession?.must_change_password !== true;
-  const keyMatches = machineAssignment?.key_matches === true;
-  const subjectBound = machineAssignment?.employee_id === authSession?.employee_code;
-  const machineAssignmentComplete = Boolean(machineAssignment?.person_name && machineAssignment?.employee_id &&
-    machineAssignment?.department_code && keyMatches && subjectBound);
-  const captureEnabled = enabled === true;
-  const subject = authSession?.employee_code;
-  const privacyNoticeAccepted = Boolean(subject && privacyAcceptance?.version === PRIVACY_NOTICE_VERSION &&
-    privacyAcceptance.subject === subject && Number.isFinite(Date.parse(privacyAcceptance.accepted_at)));
-  return {cloud_configured: configured, capture_enabled: captureEnabled,
-    auth_session_valid: authSessionValid, machine_assignment_complete: machineAssignmentComplete,
-    key_matches: keyMatches, subject_bound: subjectBound, privacy_notice_accepted: privacyNoticeAccepted,
-    capture_allowed: configured && captureEnabled && authSessionValid && machineAssignmentComplete && privacyNoticeAccepted};
+  const authenticated = Boolean(currentIdentity) && authSession?.must_change_password !== true;
+  const installationAssigned = Boolean(machineAssignment?.person_name && machineAssignment?.employee_id &&
+    machineAssignment?.department_code && machineAssignment?.key_matches === true);
+  const identityMatches = authenticated && installationAssigned &&
+    machineAssignment.employee_id === currentIdentity.employee_code &&
+    machineAssignment.department_code === currentIdentity.department_code;
+  const privacyAccepted = Boolean(currentIdentity?.employee_code &&
+    privacyAcceptance?.version === PRIVACY_NOTICE_VERSION &&
+    privacyAcceptance.subject === currentIdentity.employee_code &&
+    Number.isFinite(Date.parse(privacyAcceptance.accepted_at)));
+  const readiness = {server_configured: serverConfigured, authenticated,
+    installation_assigned: installationAssigned, identity_matches: identityMatches,
+    capture_enabled: enabled === true, privacy_accepted: privacyAccepted};
+  return {...readiness, capture_allowed: Object.values(readiness).every(Boolean)};
+}
+
+function captureBlockReason(readiness) {
+  if (!readiness.server_configured) return 'Configure uma URL válida para o servidor Harness.';
+  if (!readiness.authenticated) return 'Entre novamente na sua conta Harness.';
+  if (!readiness.installation_assigned) return 'Esta instalação ainda não foi atribuída pelo operador.';
+  if (!readiness.identity_matches) return 'A atribuição desta instalação não corresponde à conta autenticada.';
+  if (!readiness.privacy_accepted) return 'Leia e aceite o aviso de privacidade para esta conta.';
+  if (!readiness.capture_enabled) return 'A captura está pausada nesta instalação.';
+  return null;
 }
 
 async function captureAllowed() {
@@ -297,13 +308,13 @@ async function loadMachineAssignment() {
 }
 
 async function broadcastPolicy() {
-  const allowed = await captureAllowed();
+  const readiness = await captureReadiness();
   const identity = CLOUD ? await credentials() : null;
   for (const port of policyPorts) {
     try { port.postMessage({type: 'block_policy', blocked: false,
       protocolVersion: BLOCKER_PROTOCOL_VERSION,
       protocolCompatible: policyPortProtocols.get(port) === BLOCKER_PROTOCOL_VERSION,
-      machineAssigned: allowed && policyPortProtocols.get(port) === BLOCKER_PROTOCOL_VERSION,
+      readiness,
       authExpiresAt: CLOUD ? identity?.expires_at * 1000 || 0 : null}); }
     catch { policyPorts.delete(port); }
   }
@@ -409,6 +420,7 @@ async function status() {
   const readiness = await captureReadiness();
   await updateProbeConfig(readiness.capture_allowed);
   return {enabled: config.enabled === true, captureAllowed: readiness.capture_allowed,
+    readiness, captureBlockReason: captureBlockReason(readiness),
     configured: cloudConfigured(), cloud: true, authenticated: Boolean(identity),
     employeeCode: identity?.employee_code || null, expiresAt: identity?.expires_at || null,
     authProblem, installationId, machineAssignment, machineInfo,
@@ -417,7 +429,7 @@ async function status() {
   };
 }
 async function recordDiagnostic(stage, details = {}) {
-  if (!(await captureReadiness()).privacy_notice_accepted) return;
+  if (!(await captureReadiness()).privacy_accepted) return;
   const diagnostic = {stage, at: new Date().toISOString(), ...details};
   await updateLocalHistory('captureDiagnostics', entries => {
     const retained = stage === 'blocker_health' ? entries.filter(item => item.stage !== 'blocker_health') : entries;
@@ -581,7 +593,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       const identity = await credentials();
       if (!identity) throw new Error('Entre no Harness antes de ativar a captura.');
       const session = {generation: sessionGeneration, accessToken: identity.access_token};
-      if (!(await captureReadiness()).privacy_notice_accepted)
+      if (!(await captureReadiness()).privacy_accepted)
         throw new Error('Leia e confirme ciência do aviso de privacidade antes de ativar a captura.');
       try {
         const assignment = await registerAndLoadMachine();
@@ -633,7 +645,8 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
     if (page && message.type === 'inspect_sensitive_text') {
       if (typeof message.text !== 'string' || message.text.length > 100_000)
         throw new Error('Texto inválido para inspeção.');
-      if (!await captureAllowed()) throw new Error('Captura ou atribuição indisponível.');
+      const readiness = await captureReadiness();
+      if (!readiness.capture_allowed) throw new Error(`CAPTURE_BLOCKED:${captureBlockReason(readiness)}`);
       return inspectSensitiveText(message.text);
     }
 
@@ -796,12 +809,12 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
     }
     if (page && message.type === 'blocker_health') {
       if (typeof message.mainActive !== 'boolean' || typeof message.blocked !== 'boolean' ||
-          typeof message.synchronized !== 'boolean' || typeof message.machineAssigned !== 'boolean' ||
+          typeof message.synchronized !== 'boolean' || typeof message.captureAllowed !== 'boolean' ||
           typeof message.authExpired !== 'boolean' ||
           (message.protocolCompatible !== undefined && typeof message.protocolCompatible !== 'boolean'))
         throw new Error('Estado do bloqueio inválido.');
       await recordDiagnostic('blocker_health', {main_active: message.mainActive,
-        policy_synchronized: message.synchronized, page_capture_allowed: message.machineAssigned,
+        policy_synchronized: message.synchronized, page_capture_allowed: message.captureAllowed,
         auth_expired: message.authExpired, protocol_compatible: message.protocolCompatible === true,
         network_gate_blocked: message.mainBlocked === true,
         ...await captureReadiness()});
@@ -837,20 +850,23 @@ chrome.runtime.onConnect.addListener(port => {
     policyPortProtocols.set(port, message.protocolVersion);
     const protocolCompatible = message.protocolVersion === BLOCKER_PROTOCOL_VERSION;
     try {
-      port.postMessage({type: 'block_policy', blocked: false, machineAssigned: false,
+      const readiness = await captureReadiness();
+      port.postMessage({type: 'block_policy', blocked: false, readiness,
         protocolVersion: BLOCKER_PROTOCOL_VERSION, protocolCompatible});
       if (!protocolCompatible) return;
       if (await credentials()) await loadMachineAssignment();
       port.postMessage({type: 'block_policy', blocked: false,
         protocolVersion: BLOCKER_PROTOCOL_VERSION, protocolCompatible: true,
-        machineAssigned: await captureAllowed(), authExpiresAt:
+        readiness: await captureReadiness(), authExpiresAt:
           (await credentials())?.expires_at * 1000 || 0});
       await updateProbeConfig(await captureAllowed());
     } catch {
       await chrome.storage.session.set({machineAssignment: null});
       await broadcastPolicy();
       await updateProbeConfig(false);
-      try { port.postMessage({type: 'block_policy', blocked: false, machineAssigned: false,
+      try { port.postMessage({type: 'block_policy', blocked: false, readiness: {
+        server_configured: cloudConfigured(), authenticated: false, installation_assigned: false,
+        identity_matches: false, capture_enabled: false, privacy_accepted: false},
         protocolVersion: BLOCKER_PROTOCOL_VERSION, protocolCompatible}); } catch { policyPorts.delete(port); }
     }
   });

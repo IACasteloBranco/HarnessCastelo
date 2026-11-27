@@ -7,7 +7,9 @@ const mainSource = await readFile(new URL('../src/content/blocker-main.js', impo
 const bridgeSource = await readFile(new URL('../src/content/blocker-bridge.js', import.meta.url), 'utf8');
 const policySource = await readFile(new URL('../src/content/policy-engine.js', import.meta.url), 'utf8');
 const messagesSource = await readFile(new URL('../src/content/policy-messages.js', import.meta.url), 'utf8');
-const protocolVersion = 1;
+const protocolVersion = 2;
+const readyState = {server_configured: true, authenticated: true, installation_assigned: true,
+  identity_matches: true, capture_enabled: true, privacy_accepted: true};
 function bridgeWindow(listeners, origin, attributes) {
   const window = {addEventListener: (type, listener) => listeners.set(type, listener), postMessage: message => {
     if (message.phase === 'ping') listeners.get('message')?.({source: window, origin,
@@ -211,7 +213,7 @@ test('aplica a prévia mascarada ao rascunho sem enviar', async () => {
     setTimeout, globalThis: {GovernancaPlatform: platform,
       GovernancaFiles: {observe: () => ({capture_status: 'unavailable', items: [], truncated: false})},
       GovernancaCaptureAttempt: () => { captures++; }}});
-  listeners.get('policy')({type: 'block_policy', blocked: false, machineAssigned: true,
+  listeners.get('policy')({type: 'block_policy', blocked: false, readiness: readyState,
     protocolVersion, protocolCompatible: true});
   listeners.get('message')({source: window, origin: 'https://chatgpt.com', data: {
     marker: 'governanca-ai-prompt-block-v1', phase: 'pong', protocolVersion, blocked: true
@@ -264,7 +266,7 @@ test('applies the authenticated governance action in the send bridge while retai
       composer: () => form, sendButton: node => node === button},
     GovernancaFiles: {observe: () => ({capture_status: 'unavailable', items: [], truncated: false})},
     GovernancaCaptureAttempt: () => { captures++; }}});
-  listeners.get('policy')({type: 'block_policy', blocked: false, machineAssigned: true,
+  listeners.get('policy')({type: 'block_policy', blocked: false, readiness: readyState,
     protocolVersion, protocolCompatible: true});
   listeners.get('click')(buttonEvent(button));
   await new Promise(resolve => setTimeout(resolve, 20));
@@ -294,7 +296,7 @@ test('anexo visível recebe tempo para upload e mantém a barreira de uso único
         GovernancaFiles: {observe: () => ({capture_status: 'observed', items: [{capture_status: 'presence_only'}]})},
         GovernancaCaptureAttempt: value => { captured = value; }
       }});
-  policy({type: 'block_policy', blocked: false, machineAssigned: true, protocolVersion, protocolCompatible: true});
+  policy({type: 'block_policy', blocked: false, readiness: readyState, protocolVersion, protocolCompatible: true});
   listeners.get('keydown')({key: 'Enter', shiftKey: false, isComposing: false, target: editor});
   const expiry = Number(attrs.get('data-governanca-allow-until'));
   assert.ok(expiry >= now + 119000 && expiry <= now + 121000);
@@ -329,7 +331,7 @@ test('network-blocked attempt rechecks composer text without capturing or allowi
       GovernancaCaptureAttempt: () => {captureCount++;}
     }
   });
-  syncPolicy({type: 'block_policy', blocked: false, machineAssigned: true, protocolVersion, protocolCompatible: true});
+  syncPolicy({type: 'block_policy', blocked: false, readiness: readyState, protocolVersion, protocolCompatible: true});
 
   field.innerText = '-----BEGIN PRIVATE KEY-----';
   listeners.get('message')({source: window, origin: 'https://chatgpt.com', data: {
@@ -375,7 +377,7 @@ test('allows an attachment-only prompt and passes the current composer snapshot'
         assert.equal(composer, form);
         return observation;
       }}, GovernancaCaptureAttempt: value => { captured = value; }}});
-  policy({type: 'block_policy', blocked: false, machineAssigned: true, protocolVersion, protocolCompatible: true});
+  policy({type: 'block_policy', blocked: false, readiness: readyState, protocolVersion, protocolCompatible: true});
   const submit = {target: editor, key: 'Enter', shiftKey: false, isComposing: false,
     preventDefault() { this.prevented = true; }, stopImmediatePropagation() { this.stopped = true; }};
 
@@ -384,4 +386,28 @@ test('allows an attachment-only prompt and passes the current composer snapshot'
   assert.equal(submit.prevented, undefined);
   assert.equal(captured, observation);
   assert.equal(attrs.get('data-governanca-block-prompts'), 'allow');
+});
+
+test('shows the capture pause reason for this installation', () => {
+  const listeners = new Map();
+  const notices = [];
+  let policy;
+  const origin = 'https://chatgpt.com';
+  const root = {setAttribute() {}, removeAttribute() {}, getAttribute() {return null;}};
+  const document = {documentElement: root, body: {append: notice => notices.push(notice)},
+    addEventListener() {}, createElement: () => ({setAttribute() {}, style: {}})};
+  const window = {addEventListener: (type, callback) => listeners.set(type, callback), postMessage: message => {
+    if (message.phase === 'ping') listeners.get('message')?.({source: window, origin,
+      data: {marker: 'governanca-ai-prompt-block-v1', phase: 'pong', protocolVersion, blocked: true}});
+  }};
+  const port = {onMessage: {addListener: callback => {policy = callback;}},
+    onDisconnect: {addListener() {}}, postMessage() {}};
+  const chrome = {runtime: {connect: () => port, sendMessage: async () => ({})}};
+  runInNewContext(`${policySource}\n${messagesSource}\n${bridgeSource}`, {window, document, chrome,
+    location: {origin, href: `${origin}/`}, URL, Date, setTimeout() {}, globalThis: {}});
+  policy({type: 'block_policy', blocked: false, protocolVersion, protocolCompatible: true,
+    readiness: {...readyState, capture_enabled: false}});
+  listeners.get('message')({source: window, origin, data: {marker: 'governanca-ai-prompt-block-v1',
+    phase: 'network_blocked', reason: 'capture_unavailable'}});
+  assert.match(notices.at(-1).textContent, /captura está pausada nesta instalação/i);
 });
