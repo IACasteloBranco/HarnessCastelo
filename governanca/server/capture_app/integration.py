@@ -17,6 +17,7 @@ CAPTURE_PATHS = {
     "/v1/admin/analytics/tv-interactions",
     "/v1/admin/machines/assignment-requests",
     "/v1/admin/machines/health",
+    "/v1/admin/machines/{installation_id}/archive",
     "/v1/admin/machines/{installation_id}/assignment-request/approve",
     "/v1/admin/machines/{installation_id}/assignment-request/reject",
     "/v1/artifact-metadata",

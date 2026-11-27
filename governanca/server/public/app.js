@@ -196,7 +196,8 @@ async function analytics() {
       api(`/api/capture/v1/admin/analytics/departments${period}`),
     ]);
     if (version !== analyticsVersion || $('portal-screen').hidden) return;
-    $('summary').textContent = `Interações: ${summary.totals.interactions} · Respostas: ${summary.totals.responses}`;
+    $('summary-interactions').textContent = new Intl.NumberFormat('pt-BR').format(summary.totals.interactions);
+    $('summary-responses').textContent = new Intl.NumberFormat('pt-BR').format(summary.totals.responses);
     departmentRows(departments.departments);
     await interactions();
   } catch (error) { errorMessage(error); }
@@ -235,15 +236,20 @@ async function machineHealth() {
     const counts = {healthy: 0, stale: 0, paused: 0, revoked: 0, unknown: 0};
     const rows = $('installation-health-rows');
     rows.replaceChildren();
+    let visibleCount = 0;
     for (const item of items) {
       const seenAt = Date.parse(item.last_seen_at || '');
       const recent = Number.isFinite(seenAt) && seenAt <= Date.now() + 5 * 60_000 && seenAt >= cutoff;
+      const clockSkew = Number.isFinite(seenAt) && seenAt > Date.now() + 5 * 60_000;
+      const invalidSeenAt = Boolean(item.last_seen_at) && !Number.isFinite(seenAt);
       const captureEnabled = item.capture_enabled === null ? null : Number(item.capture_enabled) === 1;
-      const state = item.revoked_at ? 'revoked' : !recent ? 'stale'
+      const state = item.revoked_at ? 'revoked' : clockSkew || invalidSeenAt ? 'unknown' : !recent ? 'stale'
         : captureEnabled === false ? 'paused' : captureEnabled === true ? 'healthy' : 'unknown';
       counts[state]++;
-      const label = ({revoked: 'Revogada', stale: 'Sem sinal recente', paused: 'Captura pausada',
-        healthy: 'Saudável', unknown: 'Sinal recente'})[state];
+      if (state === 'revoked' && !$('show-archived-installations').checked) continue;
+      visibleCount++;
+      const label = ({revoked: 'Arquivada', stale: 'Sem sinal recente', paused: 'Captura pausada',
+        healthy: 'Saudável', unknown: 'Estado não confirmado'})[state];
       const row = document.createElement('tr');
       for (const value of [item.person_name || 'Não identificado', item.department_name || 'Sem departamento',
         `…${String(item.installation_id || '').slice(-8)}`, item.extension_version || 'Não reportada',
@@ -259,6 +265,17 @@ async function machineHealth() {
       status.textContent = label;
       statusCell.append(status);
       row.append(statusCell);
+      const actionCell = document.createElement('td');
+      if (state === 'stale') {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'installation-action';
+        button.textContent = 'Arquivar';
+        button.addEventListener('click', () => archiveInstallation(item.installation_id, item.person_name));
+        actionCell.append(button);
+      } else if (state === 'revoked') actionCell.textContent = 'Arquivada';
+      else actionCell.textContent = '—';
+      row.append(actionCell);
       rows.append(row);
     }
     $('installation-count').textContent = new Intl.NumberFormat('pt-BR').format(items.length);
@@ -267,7 +284,7 @@ async function machineHealth() {
     $('installation-paused').textContent = new Intl.NumberFormat('pt-BR').format(counts.paused);
     $('installation-revoked').textContent = new Intl.NumberFormat('pt-BR').format(counts.revoked);
     $('installation-unknown').textContent = new Intl.NumberFormat('pt-BR').format(counts.unknown);
-    $('installation-health-empty').hidden = items.length > 0;
+    $('installation-health-empty').hidden = visibleCount > 0;
     $('installation-health-updated').textContent = `Atualizado às ${new Intl.DateTimeFormat('pt-BR', {
       timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit',
     }).format(new Date())}`;
@@ -275,6 +292,13 @@ async function machineHealth() {
     if (version === machineHealthVersion && !$('portal-screen').hidden)
       $('installation-health-updated').textContent = 'Consulta indisponível';
   }
+}
+async function archiveInstallation(installationId, personName) {
+  if (!installationId || !confirm(`Confirme apenas se esta instalação estiver ociosa de propósito. Arquivar a instalação de ${personName || 'colaborador não identificado'} revoga o acesso à captura; os registros históricos serão mantidos.`)) return;
+  try {
+    await api(`/api/capture/v1/admin/machines/${encodeURIComponent(installationId)}/archive`, {method: 'POST'});
+    await machineHealth();
+  } catch (error) { errorMessage(error); }
 }
 async function heartbeatSettings() {
   const version = ++heartbeatSettingsVersion;
@@ -583,6 +607,7 @@ $('login-form').addEventListener('submit', async event => {
 });
 $('policy-form').addEventListener('submit', savePolicy);
 $('heartbeat-settings-form').addEventListener('submit', saveHeartbeatSettings);
+$('show-archived-installations').addEventListener('change', () => { void machineHealth(); });
 $('search-form').addEventListener('submit', async event => {
   event.preventDefault();
   clearDetail();
@@ -680,11 +705,12 @@ $('logout').addEventListener('click', async () => {
     backupStatusVersion++;
     policyCatalogVersion++;
     clearDetail();
-    for (const id of ['summary', 'interaction-count', 'active-case', 'message', 'activity-interactions',
+    for (const id of ['summary', 'summary-interactions', 'summary-responses', 'interaction-count', 'active-case', 'message', 'activity-interactions',
       'activity-complete', 'activity-incomplete', 'activity-last-event', 'activity-updated']) $(id).textContent = '';
     machineHealthVersion++;
     heartbeatSettingsVersion++;
     $('installation-health-rows').replaceChildren();
+    $('show-archived-installations').checked = false;
     for (const id of ['installation-health-updated', 'installation-count', 'installation-healthy',
       'installation-stale', 'installation-paused', 'installation-revoked', 'installation-unknown']) $(id).textContent = '';
     $('heartbeat-interval-hours').value = '';

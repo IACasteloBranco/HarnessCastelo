@@ -1,6 +1,6 @@
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
@@ -255,6 +255,48 @@ def machine_health(response: Response,
             (scope["organization_code"],),
         ).fetchone()
     return {"items": [dict(row) for row in rows], "heartbeat": dict(heartbeat)}
+
+
+@app.post("/v1/admin/machines/{installation_id}/archive")
+def archive_machine_installation(
+    installation_id: UUID,
+    scope: dict = Depends(require_governance_analytics),
+    employee: EmployeeInfo = Depends(require_capture_token),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    with connect(settings) as db:
+        begin_write(db, "machines", "privacy_audit")
+        row = db.execute(
+            """SELECT m.last_seen_at, m.revoked_at, o.heartbeat_stale_hours
+               FROM machines m
+               JOIN public.employees e ON e.code = COALESCE(m.employee_id, m.requested_employee_id)
+               JOIN public.organizations o ON o.id = e.organization_id
+               WHERE m.installation_id = ? AND o.code = ?""",
+            (str(installation_id), scope["organization_code"]),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Installation not found")
+        if row["revoked_at"]:
+            raise HTTPException(status_code=409, detail="Installation is already archived")
+        now = utc_now()
+        if row["last_seen_at"]:
+            try:
+                last_seen = datetime.fromisoformat(row["last_seen_at"].replace("Z", "+00:00"))
+                if last_seen.tzinfo is None:
+                    last_seen = last_seen.replace(tzinfo=timezone.utc)
+            except ValueError as error:
+                raise HTTPException(status_code=409, detail="Installation health is unavailable") from error
+            if last_seen > now + timedelta(minutes=5) or last_seen > now - timedelta(hours=row["heartbeat_stale_hours"]):
+                raise HTTPException(status_code=409, detail="Installation is not stale")
+        cursor = db.execute(
+            "UPDATE machines SET revoked_at = ? WHERE installation_id = ? AND revoked_at IS NULL",
+            (iso(now), str(installation_id)),
+        )
+        if cursor.rowcount != 1:
+            raise HTTPException(status_code=409, detail="Installation changed; refresh and try again")
+        record_privacy_audit(db, "machine_archived", employee.code,
+                             f"POST /v1/admin/machines/{installation_id}/archive", 1)
+    return {"status": "archived", "installation_id": str(installation_id)}
 
 
 @app.get("/v1/admin/machines/assignment-requests")

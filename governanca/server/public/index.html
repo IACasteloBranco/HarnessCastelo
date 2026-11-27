@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; base-uri 'none'; object-src 'none'; form-action 'self'">
   <title>Governança de IA</title>
-  <link rel="stylesheet" href="./portal.css?v=20261127-heartbeat-settings">
+  <link rel="stylesheet" href="./portal.css?v=20261127-overview-archive">
   <script defer src="./markdown-it.min.js?v=20261116-markdown"></script>
-  <script defer src="./app.js?v=20261127-heartbeat-settings"></script>
+  <script defer src="./app.js?v=20261127-overview-archive"></script>
 </head>
 <body>
   <header>
@@ -40,8 +40,9 @@
         <button type="button" id="nav-policies" data-page-target="policies">Políticas de IA</button>
       </nav>
       <div id="page-overview" class="portal-page" data-page="overview">
-      <section class="analytics-overview" aria-labelledby="summary-title"><h3 id="summary-title">Resumo</h3><p id="summary"></p></section>
-      <section class="analytics-departments" aria-labelledby="departments-title"><h3 id="departments-title">Departamentos</h3><ul id="departments"></ul></section>
+      <div class="overview-heading"><div><p class="overview-kicker">Governança · operação</p><h2>Visão geral</h2><p>Acompanhe o uso da plataforma e consulte interações no período selecionado.</p></div><span class="overview-period">Indicadores acompanham as datas selecionadas</span></div>
+      <section class="analytics-overview" aria-labelledby="summary-title"><div><p class="overview-kicker">Panorama do período</p><h3 id="summary-title">Atividade registrada</h3><p id="summary">Interações e respostas no período selecionado.</p></div><div class="overview-totals"><div><span>Interações</span><strong id="summary-interactions">—</strong></div><div><span>Respostas</span><strong id="summary-responses">—</strong></div></div></section>
+      <div class="overview-layout">
       <section class="analytics-interactions" aria-labelledby="interactions-title">
         <h3 id="interactions-title">Interações</h3>
         <form id="search-form">
@@ -55,6 +56,9 @@
         <p id="interaction-count"></p><ul id="interactions"></ul>
         <h4>Conteúdo da interação selecionada</h4><div id="detail" class="interaction-detail" aria-live="polite"></div>
       </section>
+      <section class="analytics-departments" aria-labelledby="departments-title"><h3 id="departments-title">Departamentos</h3><ul id="departments"></ul></section>
+      </div>
+      <div class="governance-tools">
       <section aria-labelledby="investigations-title">
         <h3 id="investigations-title">Acesso a interações</h3>
         <p>Selecione o colaborador e solicite o acesso pelo botão. A liberação é automática por uma hora e fica registrada para auditoria. Depois, clique em “Ver detalhe” na interação para consultar o prompt e as respostas.</p>
@@ -84,6 +88,7 @@
         </form>
       </section>
       </div>
+      </div>
       <div id="page-health" class="portal-page" data-page="health" hidden>
         <section aria-labelledby="health-title">
           <div class="feature-heading"><div><h3 id="health-title">Atividade de captura hoje</h3><p>Registros recebidos pela extensão no dia de hoje.</p></div><span id="activity-updated" class="status-pill">Carregando</span></div>
@@ -106,11 +111,12 @@
             </div>
             <div class="installation-table-scroll" role="region" aria-label="Inventário de instalações" tabindex="0">
               <table class="installation-table">
-                <thead><tr><th>Colaborador</th><th>Departamento</th><th>Instalação</th><th>Versão</th><th>Captura</th><th>Último sinal</th><th>Saúde</th></tr></thead>
+                <thead><tr><th>Colaborador</th><th>Departamento</th><th>Instalação</th><th>Versão</th><th>Captura</th><th>Último sinal</th><th>Saúde</th><th>Ação</th></tr></thead>
                 <tbody id="installation-health-rows"></tbody>
               </table>
             </div>
-            <p id="installation-health-empty" class="feature-note" hidden>Nenhuma instalação vinculada a esta organização.</p>
+            <label class="archived-toggle"><input id="show-archived-installations" type="checkbox"> Mostrar instalações arquivadas</label>
+            <p id="installation-health-empty" class="feature-note" hidden>Nenhuma instalação ativa vinculada a esta organização.</p>
           </section>
           <form id="heartbeat-settings-form" class="heartbeat-settings">
             <h3>Configuração do heartbeat</h3>
